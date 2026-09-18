@@ -82,16 +82,16 @@ export class EmulatorSession {
         <h2 class="session-title">${label}</h2>
         <span class="session-focus-tag">Click to control</span>
       </div>
-      <div class="stage" tabindex="0">
-        <canvas width="${SCREEN_WIDTH}" height="${SCREEN_HEIGHT}" aria-label="Game Boy screen"></canvas>
-      </div>
-      <div class="touch-pad" aria-label="Touch controls">
+      <div class="play-deck">
         <div class="touch-dpad" role="group" aria-label="D-pad">
           <button type="button" class="touch-btn touch-up" data-btn="up" aria-label="Up">▲</button>
           <button type="button" class="touch-btn touch-left" data-btn="left" aria-label="Left">◀</button>
           <button type="button" class="touch-btn touch-right" data-btn="right" aria-label="Right">▶</button>
           <button type="button" class="touch-btn touch-down" data-btn="down" aria-label="Down">▼</button>
           <span class="touch-dpad-center" aria-hidden="true"></span>
+        </div>
+        <div class="stage" tabindex="0">
+          <canvas width="${SCREEN_WIDTH}" height="${SCREEN_HEIGHT}" aria-label="Game Boy screen"></canvas>
         </div>
         <div class="touch-face" role="group" aria-label="Action buttons">
           <button type="button" class="touch-btn touch-b" data-btn="b" aria-label="B">B</button>
@@ -102,37 +102,39 @@ export class EmulatorSession {
           <button type="button" class="touch-btn touch-start" data-btn="start" aria-label="Start">Start</button>
         </div>
       </div>
-      <div class="toolbar">
-        <label class="file-btn">
-          Open ROM
-          <input type="file" accept=".gb,.gbc,.bin" hidden data-rom />
-        </label>
-        <button type="button" data-fullscreen>Fullscreen</button>
-        <button type="button" data-speed>Speed 1x</button>
-        <button type="button" data-mute>Mute</button>
-        <label class="scale-label">
-          Shades
-          <select data-palette>${paletteOptions}</select>
-        </label>
-        <label class="scale-label">
-          Scale
-          <select data-scale>
-            <option value="2">2×</option>
-            <option value="3" selected>3×</option>
-            <option value="4">4×</option>
-            <option value="fit">Fit</option>
-          </select>
-        </label>
-      </div>
-      <div class="toolbar savestate-bar">
-        <label class="scale-label">
-          State
-          <select data-slot>${slotOptions}</select>
-        </label>
-        <button type="button" data-save-state>Save State</button>
-        <button type="button" data-load-state>Load State</button>
-        <button type="button" data-options>Options</button>
-        <span class="slot-hint" data-slot-hint></span>
+      <div class="controls-panel">
+        <div class="action-bar" role="toolbar" aria-label="Emulator actions">
+          <label class="file-btn">
+            Open ROM
+            <input type="file" accept=".gb,.gbc,.bin" hidden data-rom />
+          </label>
+          <button type="button" data-speed>Speed 1x</button>
+          <button type="button" data-mute>Mute</button>
+          <button type="button" data-save-state>Save</button>
+          <button type="button" data-load-state>Load</button>
+          <button type="button" data-options>Options</button>
+          <button type="button" class="desktop-only" data-fullscreen>Fullscreen</button>
+        </div>
+        <div class="settings-row">
+          <label class="scale-label">
+            Shades
+            <select data-palette>${paletteOptions}</select>
+          </label>
+          <label class="scale-label desktop-only">
+            Scale
+            <select data-scale>
+              <option value="2">2×</option>
+              <option value="3" selected>3×</option>
+              <option value="4">4×</option>
+              <option value="fit">Fit</option>
+            </select>
+          </label>
+          <label class="scale-label">
+            Slot
+            <select data-slot>${slotOptions}</select>
+          </label>
+          <span class="slot-hint" data-slot-hint></span>
+        </div>
       </div>
       <p class="status" data-status>No ROM loaded</p>
     `;
@@ -250,6 +252,7 @@ export class EmulatorSession {
       return true;
     }
     if (e.code === "KeyF") {
+      if (isMobileLayout()) return false;
       e.preventDefault();
       void this.toggleFullscreen();
       return true;
@@ -366,7 +369,7 @@ export class EmulatorSession {
   }
 
   private bindTouchPad(): void {
-    const pad = this.root.querySelector<HTMLElement>(".touch-pad");
+    const pad = this.root.querySelector<HTMLElement>(".play-deck");
     if (!pad) return;
 
     const active = new Map<number, Button>();

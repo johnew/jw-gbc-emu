@@ -39,7 +39,7 @@ export function mountApp(root: HTMLElement): void {
           <li><kbd>Z</kbd> / <kbd>K</kbd> — A &nbsp; <kbd>X</kbd> / <kbd>J</kbd> — B</li>
           <li><kbd>Enter</kbd> — Start &nbsp; <kbd>Shift</kbd> — Select</li>
           <li><kbd>F5</kbd> / <kbd>F7</kbd> — save / load state &nbsp; <kbd>1</kbd>–<kbd>9</kbd> — slot</li>
-          <li><kbd>Tab</kbd> speed · <kbd>P</kbd> shades · <kbd>F</kbd> fullscreen · <kbd>M</kbd> mute</li>
+          <li><kbd>Tab</kbd> speed · <kbd>P</kbd> shades · <kbd>F</kbd> fullscreen (desktop) · <kbd>M</kbd> mute</li>
           <li><strong>Options</strong> — download / import battery saves and savestates</li>
           <li><strong>Link cable</strong> — connect both games to trade (works with mobile tabs)</li>
         </ul>

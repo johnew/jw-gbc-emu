@@ -231,21 +231,44 @@ body {
   align-items: center;
 }
 
-/* —— On-screen touch controls (Game Boy layout) —— */
-.touch-pad {
-  display: none;
-  margin-top: 0.85rem;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
-  padding: 0.25rem 0.15rem 0.5rem;
+.play-deck {
+  display: contents;
 }
 
+.touch-dpad,
+.touch-face,
+.touch-system {
+  display: none;
+}
+
+.controls-panel {
+  margin-top: 0.75rem;
+}
+
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+/* —— On-screen touch controls (Game Boy layout) —— */
 .touch-dpad {
   position: relative;
   width: 148px;
   height: 148px;
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .touch-dpad .touch-btn {
@@ -279,6 +302,9 @@ body {
   height: 118px;
   flex-shrink: 0;
   margin: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .touch-face .touch-btn {
@@ -302,12 +328,14 @@ body {
 }
 
 .touch-system {
-  display: flex;
+  display: none;
   justify-content: center;
   align-items: center;
   gap: 1.75rem;
-  margin-top: 0.35rem;
   width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .touch-system .touch-btn {
@@ -321,10 +349,7 @@ body {
   color: var(--muted);
 }
 
-.touch-select {
-  transform: rotate(-28deg);
-}
-
+.touch-select,
 .touch-start {
   transform: rotate(-28deg);
 }
@@ -351,22 +376,55 @@ body {
 }
 
 @media (pointer: coarse), (max-width: 768px) {
+  .desktop-only {
+    display: none !important;
+  }
+
   .shell {
-    padding-top: 0.75rem;
+    padding-top: 0.65rem;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
 
   .top h1 {
-    font-size: 1.45rem;
+    font-size: 1.35rem;
   }
 
   .tagline {
-    font-size: 0.85rem;
+    font-size: 0.82rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .global-bar {
+    gap: 0.4rem;
     margin-bottom: 0.65rem;
   }
 
-  /* Stable sizing: avoid vh/dvh so the screen doesn't jump when the URL bar moves */
+  .global-hint {
+    margin-left: 0;
+    width: 100%;
+    font-size: 0.78rem;
+  }
+
+  .session {
+    padding: 0.55rem;
+  }
+
+  .session-head {
+    margin-bottom: 0.35rem;
+  }
+
+  .session-title {
+    font-size: 1rem;
+  }
+
+  .session-focus-tag {
+    display: none;
+  }
+
+  /* Stable canvas size (no jumping vh while scrolling) */
   .stage {
     padding: 8px;
+    grid-area: stage;
   }
 
   .stage.fit canvas,
@@ -378,125 +436,251 @@ body {
     max-height: none;
   }
 
-  .touch-pad {
+  .play-deck {
     display: grid;
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
+      "stage stage"
       "dpad face"
       "sys sys";
     align-items: center;
-    column-gap: 0.75rem;
-    row-gap: 0.65rem;
+    column-gap: 0.65rem;
+    row-gap: 0.55rem;
+    margin-top: 0.15rem;
   }
 
   .touch-dpad {
+    display: block;
     grid-area: dpad;
     justify-self: start;
   }
 
   .touch-face {
+    display: block;
     grid-area: face;
     justify-self: end;
   }
 
   .touch-system {
+    display: flex;
     grid-area: sys;
   }
 
-  .toolbar button,
-  .file-btn,
+  .controls-panel {
+    margin-top: 0.65rem;
+  }
+
+  .action-bar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .action-bar .file-btn,
+  .action-bar button {
+    min-height: 44px;
+    width: 100%;
+    justify-content: center;
+    padding: 0.45rem 0.35rem;
+    font-size: 0.82rem;
+    border-radius: 8px;
+  }
+
+  .settings-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    margin-top: 0.45rem;
+  }
+
+  .settings-row .scale-label {
+    width: 100%;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .settings-row .scale-label select {
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.9rem;
+  }
+
+  .slot-hint {
+    grid-column: 1 / -1;
+    font-size: 0.75rem;
+    margin: 0;
+  }
+
+  .status {
+    margin-top: 0.45rem;
+    font-size: 0.8rem;
+  }
+
+  .help {
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+
   .global-bar button,
   .options-actions button {
     min-height: 44px;
     padding: 0.55rem 0.9rem;
   }
+}
 
-  .scale-label {
-    width: 100%;
-    margin-top: 0.25rem;
-  }
-
-  .scale-label select {
-    flex: 1;
-    min-height: 44px;
-  }
-
-  .global-hint {
-    margin-left: 0;
-    width: 100%;
-  }
-
-  .session-focus-tag {
+/* Landscape: screen between D-pad and A/B, compact chrome */
+@media (pointer: coarse) and (orientation: landscape),
+  (max-width: 900px) and (orientation: landscape) {
+  .top .tagline,
+  .help {
     display: none;
   }
 
-  .help {
-    margin-top: 1.25rem;
+  .shell {
+    max-width: none;
+    padding: 0.35rem max(0.5rem, env(safe-area-inset-right))
+      max(0.35rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left));
   }
-}
 
-/* Landscape phone: keep D-pad left / actions right, tighter screen */
-@media (pointer: coarse) and (orientation: landscape),
-  (max-width: 900px) and (orientation: landscape) {
-  .touch-pad {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas: "dpad sys face";
-    gap: 0.35rem 1rem;
+  .top h1 {
+    font-size: 1.05rem;
+  }
+
+  .global-bar {
+    margin-bottom: 0.35rem;
+  }
+
+  .global-hint {
+    display: none;
+  }
+
+  .session-tabs {
+    margin-bottom: 0.35rem;
+  }
+
+  .session-tab {
+    min-height: 36px;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .session {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100svh - 5.5rem);
+    overflow: hidden;
+  }
+
+  .play-deck {
+    flex: 1;
+    min-height: 0;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dpad stage face"
+      "dpad sys face";
+    column-gap: 0.5rem;
+    row-gap: 0.25rem;
     align-items: center;
   }
 
-  .touch-dpad {
-    grid-area: dpad;
-    width: 128px;
-    height: 128px;
-  }
-
-  .touch-dpad .touch-btn {
-    width: 42px;
-    height: 42px;
-  }
-
-  .touch-up { left: 43px; }
-  .touch-down { left: 43px; }
-  .touch-left { top: 43px; }
-  .touch-right { top: 43px; }
-
-  .touch-dpad-center {
-    top: 43px;
-    left: 43px;
-    width: 42px;
-    height: 42px;
-  }
-
-  .touch-face {
-    grid-area: face;
-    width: 100px;
-    height: 100px;
-  }
-
-  .touch-face .touch-btn {
-    width: 50px;
-    height: 50px;
-  }
-
-  .touch-system {
-    grid-area: sys;
-    flex-direction: column;
-    gap: 0.65rem;
-    margin-top: 0;
-    width: auto;
-  }
-
-  .touch-select,
-  .touch-start {
-    transform: rotate(-28deg);
+  .stage {
+    align-self: stretch;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 0;
   }
 
   .stage.fit canvas,
   .stage canvas {
-    width: min(100%, calc(42svh * 160 / 144));
-    max-height: 42svh;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: 160 / 144;
+  }
+
+  .touch-dpad {
+    width: 120px;
+    height: 120px;
+  }
+
+  .touch-dpad .touch-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .touch-up { left: 40px; }
+  .touch-down { left: 40px; }
+  .touch-left { top: 40px; }
+  .touch-right { top: 40px; }
+
+  .touch-dpad-center {
+    top: 40px;
+    left: 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .touch-face {
+    width: 96px;
+    height: 96px;
+  }
+
+  .touch-face .touch-btn {
+    width: 48px;
+    height: 48px;
+  }
+
+  .touch-system {
+    gap: 1rem;
+  }
+
+  .touch-system .touch-btn {
+    min-width: 64px;
+    height: 28px;
+    font-size: 0.65rem;
+  }
+
+  .controls-panel {
+    margin-top: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .action-bar {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.3rem;
+  }
+
+  .action-bar .file-btn,
+  .action-bar button {
+    min-height: 36px;
+    font-size: 0.72rem;
+    padding: 0.3rem 0.2rem;
+  }
+
+  .settings-row {
+    grid-template-columns: 1fr 1fr auto;
+    gap: 0.35rem;
+    align-items: end;
+  }
+
+  .settings-row .scale-label select {
+    min-height: 36px;
+  }
+
+  .slot-hint {
+    grid-column: auto;
+    align-self: center;
+  }
+
+  .status {
+    display: none;
   }
 }
 
@@ -524,10 +708,24 @@ html.immersive .immersive-session {
   background: transparent;
 }
 
+html.immersive .immersive-session .controls-panel {
+  display: none !important;
+}
+
+html.immersive .immersive-session .touch-dpad,
+html.immersive .immersive-session .touch-face,
+html.immersive .immersive-session .touch-system {
+  display: none !important;
+}
+
+html.immersive .immersive-session .play-deck {
+  display: block;
+}
+
 html.immersive .immersive-session .stage.fit canvas,
 html.immersive .immersive-session .stage canvas {
-  max-height: 48svh;
-  width: min(100%, calc(48svh * 160 / 144));
+  max-height: 90svh;
+  width: min(100%, calc(90svh * 160 / 144));
 }
 
 .savestate-bar {
@@ -540,6 +738,7 @@ html.immersive .immersive-session .stage canvas {
 }
 
 .toolbar button,
+.action-bar button,
 .file-btn,
 .global-bar button,
 .options-actions button {
@@ -554,6 +753,7 @@ html.immersive .immersive-session .stage canvas {
 }
 
 .toolbar button:hover,
+.action-bar button:hover,
 .file-btn:hover,
 .global-bar button:hover,
 .options-actions button:hover {
