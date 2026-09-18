@@ -78,3 +78,22 @@ Provide your own legally obtained ROM dumps. Commercial game ROMs are not includ
 npm run build
 npm run preview
 ```
+
+## GitHub Pages
+
+This repo includes a workflow that builds and publishes `dist/` on every push to `master`/`main`.
+
+1. Create a GitHub repo and push this project (keep the default branch `master` or `main`).
+2. On GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+3. After the **Deploy to GitHub Pages** workflow succeeds, open  
+   `https://<you>.github.io/<repo-name>/`  
+   (example: `https://johnew.github.io/jw-gbc-emu/`).
+
+Local check with the same asset prefix GitHub uses:
+
+```bash
+# PowerShell
+$env:BASE_PATH="/jw-gbc-emu/"; npm run build; npm run preview
+```
+
+Do not commit ROM files. Users load their own `.gb` / `.gbc` in the browser.
