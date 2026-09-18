@@ -6,14 +6,18 @@ import { Mmu } from "./mmu";
 import { Ppu } from "./ppu";
 import { LinkCable } from "./serial";
 import { Timer } from "./timer";
-import type { Button, DmgPaletteId, EmulatorSavestate } from "./types";
-import { CYCLES_PER_FRAME, DMG_PALETTE_IDS, IF_JOYPAD, IF_LCD, IF_TIMER, IF_VBLANK } from "./types";
+import type { Button, DmgPaletteId, EmulatorSavestate, SaveState } from "./types";
+import { CYCLES_PER_FRAME, DMG_PALETTE_IDS, IF_JOYPAD, IF_TIMER } from "./types";
 import { hasSavestate, loadSave, loadSavestate, listSavestateSlots, saveSave, saveSavestate } from "./saves";
 
-/** Shared cable instance for the two browser sessions. */
+const AUTOSAVE_EVERY_FRAMES = 120;
+const SPEED_STEPS = [1, 2, 4, 6] as const;
+const MAX_SPEED = SPEED_STEPS[SPEED_STEPS.length - 1]!;
+
+/** Shared cable for the two on-page sessions. */
 let sharedCable: LinkCable | null = null;
 
-export function getSharedLinkCable(): LinkCable {
+function sharedLinkCable(): LinkCable {
   if (!sharedCable) sharedCable = new LinkCable();
   return sharedCable;
 }
@@ -81,11 +85,12 @@ export class Emulator {
   }
 
   setSpeed(speed: number): void {
-    this.speed = Math.max(1, Math.min(4, speed));
+    this.speed = Math.max(1, Math.min(MAX_SPEED, speed));
   }
 
   cycleSpeed(): number {
-    const next = this.speed === 1 ? 2 : this.speed === 2 ? 4 : 1;
+    const idx = SPEED_STEPS.findIndex((s) => s === this.speed);
+    const next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.length]!;
     this.setSpeed(next);
     return this.speed;
   }
@@ -134,13 +139,11 @@ export class Emulator {
     this.mmu.write(0xff4a, 0x00);
     this.mmu.write(0xff4b, 0x00);
     if (this.cart.isCgb) {
-      // CGB-specific post-boot: KEY1 clear, VBK 0, SVBK 1, HDMA idle, white-ish palettes
       this.mmu.key1 = 0;
       this.mmu.doubleSpeed = false;
       this.ppu.vbk = 0;
       this.mmu.svbk = 1;
       this.mmu.hdma5 = 0xff;
-      // Init BG palette 0 to grayscale ramp so early frames aren't random
       for (let i = 0; i < 8; i++) {
         const shades = [0x7fff, 0x56b5, 0x294a, 0x0000];
         for (let c = 0; c < 4; c++) {
@@ -196,8 +199,7 @@ export class Emulator {
 
   saveStateToSlot(slot: number): void {
     if (!this.cart) throw new Error("No ROM loaded");
-    const state = this.createSavestate();
-    saveSavestate(this.cart.header, slot, state);
+    saveSavestate(this.cart.header, slot, this.createSavestate());
     this.flushSave();
   }
 
@@ -232,13 +234,13 @@ export class Emulator {
   }
 
   /** Full battery payload including RTC when present. */
-  exportBatterySave(): import("./types").SaveState | null {
+  exportBatterySave(): SaveState | null {
     if (!this.cart) return null;
     this.flushSave();
     return this.cart.getSaveData();
   }
 
-  importBatterySave(data: import("./types").SaveState): void {
+  importBatterySave(data: SaveState): void {
     if (!this.cart) throw new Error("No ROM loaded");
     this.cart.loadSaveData(data);
     this.flushSave();
@@ -267,19 +269,17 @@ export class Emulator {
     return this.mmu.serial.isLinked();
   }
 
-  /** Attach this emulator and `other` to the shared link cable. */
+  /** Attach this emulator and `other` to the shared link cable (pins both to 1×). */
   linkWith(other: Emulator): void {
-    const cable = getSharedLinkCable();
-    cable.connect(this.mmu.serial, other.mmu.serial);
-    // Trading is fragile at turbo — pin both to 1×
+    this.unlink();
+    other.unlink();
+    sharedLinkCable().connect(this.mmu.serial, other.mmu.serial);
     this.setSpeed(1);
     other.setSpeed(1);
   }
 
   unlink(): void {
-    if (this.mmu.serial.isLinked()) {
-      getSharedLinkCable().disconnect();
-    }
+    if (sharedCable?.connected) sharedCable.disconnect();
   }
 
   /** Run until one video frame completes. Returns true if a frame was produced. */
@@ -290,18 +290,19 @@ export class Emulator {
     let safety = CYCLES_PER_FRAME * (this.mmu.doubleSpeed ? 4 : 2);
     while (!this.ppu.frameReady && safety > 0) {
       const cycles = this.cpu.step();
-      const ppuCycles = this.mmu.doubleSpeed ? Math.floor(cycles / 2) : cycles;
+      // Wall-clock T-cycles: PPU/APU/serial are NOT sped up in CGB double-speed.
+      const wallCycles = this.mmu.doubleSpeed ? Math.floor(cycles / 2) : cycles;
       this.timer.step(cycles);
-      this.mmu.serial.step(cycles);
-      this.ppu.step(ppuCycles);
-      this.apu.step(ppuCycles);
+      this.mmu.serial.step(wallCycles);
+      this.ppu.step(wallCycles);
+      this.apu.step(wallCycles);
       this.cyclesThisFrame += cycles;
       safety -= cycles;
     }
 
     this.saveTimer += this.cyclesThisFrame;
     this.cyclesThisFrame = 0;
-    if (this.saveTimer >= CYCLES_PER_FRAME * 120) {
+    if (this.saveTimer >= CYCLES_PER_FRAME * AUTOSAVE_EVERY_FRAMES) {
       this.saveTimer = 0;
       this.flushSave();
     }
@@ -309,18 +310,10 @@ export class Emulator {
     return this.ppu.frameReady;
   }
 
-  runFrames(): Float32Array {
-    const frames = this.speed;
-    for (let i = 0; i < frames; i++) this.runFrame();
-    return this.apu.takeSamples();
-  }
-
   flushSave(): void {
     if (!this.cart) return;
     const data = this.cart.getSaveData();
-    if (data) {
-      saveSave(this.cart.header, data);
-    }
+    if (data) saveSave(this.cart.header, data);
   }
 
   unload(): void {
@@ -331,4 +324,3 @@ export class Emulator {
 }
 
 export type { Button, DmgPaletteId };
-export { IF_VBLANK, IF_LCD, IF_TIMER, IF_JOYPAD };

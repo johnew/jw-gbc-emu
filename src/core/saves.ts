@@ -1,20 +1,5 @@
-import type { CartridgeHeader, EmulatorSavestate } from "./types";
-
-export function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-export function base64ToUint8(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
-}
+import { base64ToUint8, uint8ToBase64 } from "./encoding";
+import type { CartridgeHeader, EmulatorSavestate, SaveState } from "./types";
 
 function batteryKey(header: CartridgeHeader): string {
   return `gbc-save:${header.title}:${header.checksum.toString(16)}`;
@@ -24,16 +9,16 @@ function savestateKey(header: CartridgeHeader, slot: number): string {
   return `gbc-savestate:${header.title}:${header.checksum.toString(16)}:slot${slot}`;
 }
 
-function encodeBattery(data: import("./types").SaveState): string {
+function encodeBattery(data: SaveState): string {
   return JSON.stringify({
     sram: uint8ToBase64(data.sram),
     rtc: data.rtc ?? null,
   });
 }
 
-function decodeBattery(raw: string): import("./types").SaveState | null {
+function decodeBattery(raw: string): SaveState | null {
   try {
-    const obj = JSON.parse(raw) as { sram: string; rtc?: import("./types").SaveState["rtc"] };
+    const obj = JSON.parse(raw) as { sram: string; rtc?: SaveState["rtc"] };
     return {
       sram: base64ToUint8(obj.sram),
       rtc: obj.rtc ?? undefined,
@@ -43,7 +28,7 @@ function decodeBattery(raw: string): import("./types").SaveState | null {
   }
 }
 
-export function loadSave(header: CartridgeHeader): import("./types").SaveState | null {
+export function loadSave(header: CartridgeHeader): SaveState | null {
   try {
     const raw = localStorage.getItem(batteryKey(header));
     if (!raw) return null;
@@ -53,7 +38,7 @@ export function loadSave(header: CartridgeHeader): import("./types").SaveState |
   }
 }
 
-export function saveSave(header: CartridgeHeader, data: import("./types").SaveState): void {
+export function saveSave(header: CartridgeHeader, data: SaveState): void {
   try {
     localStorage.setItem(batteryKey(header), encodeBattery(data));
   } catch (e) {
@@ -105,13 +90,13 @@ export interface BackupBundle {
   title: string;
   checksum: number;
   exportedAt: number;
-  battery: { sram: string; rtc?: import("./types").SaveState["rtc"] } | null;
+  battery: { sram: string; rtc?: SaveState["rtc"] } | null;
   savestates: Record<string, EmulatorSavestate>;
 }
 
 export function buildBackupBundle(
   header: CartridgeHeader,
-  battery: import("./types").SaveState | null,
+  battery: SaveState | null,
 ): BackupBundle {
   const savestates: Record<string, EmulatorSavestate> = {};
   for (const slot of listSavestateSlots(header)) {
@@ -138,17 +123,3 @@ export function parseBackupBundle(raw: unknown): BackupBundle | null {
   if (typeof obj.title !== "string" || typeof obj.checksum !== "number") return null;
   return obj as BackupBundle;
 }
-
-export function downloadBlob(filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export function safeFilename(name: string): string {
-  return name.replace(/[^\w\-]+/g, "_").replace(/^_+|_+$/g, "") || "game";
-}
-

@@ -1,7 +1,9 @@
 import { EmulatorSession } from "./session";
-import { FRAME_DURATION_MS } from "../core/types";
+import { isMobileLayout, takeFrameBudget } from "./layout";
 
 export function mountApp(root: HTMLElement): void {
+  const mobile = isMobileLayout();
+
   root.innerHTML = `
     <div class="shell">
       <header class="top">
@@ -14,7 +16,16 @@ export function mountApp(root: HTMLElement): void {
         <button type="button" id="remove-instance" hidden>Close second game</button>
         <button type="button" id="link-cable" hidden>Connect link cable</button>
         <span class="link-status" id="link-status" hidden></span>
-        <span class="global-hint" id="global-hint">Click a screen to send keyboard controls there.</span>
+        <span class="global-hint" id="global-hint">${
+          mobile
+            ? "Use on-screen buttons to play. With two games, switch tabs above the screen."
+            : "Tap a screen to control it. On phones, use the on-screen buttons."
+        }</span>
+      </div>
+
+      <div class="session-tabs" id="session-tabs" hidden role="tablist" aria-label="Games">
+        <button type="button" class="session-tab" role="tab" data-index="0" aria-selected="true">Game 1</button>
+        <button type="button" class="session-tab" role="tab" data-index="1" aria-selected="false" hidden>Game 2</button>
       </div>
 
       <div class="sessions" id="sessions"></div>
@@ -22,14 +33,15 @@ export function mountApp(root: HTMLElement): void {
       <aside class="help">
         <h2>Controls</h2>
         <ul>
-          <li>Click a game panel to focus it — keys only go to the focused game</li>
+          <li><strong>Mobile:</strong> on-screen D-pad, A/B, Start/Select · with two games, use the <strong>Game 1 / Game 2</strong> tabs to switch</li>
+          <li>Tap/click a game panel to focus it (desktop dual view)</li>
           <li><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> or <kbd>WASD</kbd> — D-pad</li>
           <li><kbd>Z</kbd> / <kbd>K</kbd> — A &nbsp; <kbd>X</kbd> / <kbd>J</kbd> — B</li>
           <li><kbd>Enter</kbd> — Start &nbsp; <kbd>Shift</kbd> — Select</li>
           <li><kbd>F5</kbd> / <kbd>F7</kbd> — save / load state &nbsp; <kbd>1</kbd>–<kbd>9</kbd> — slot</li>
           <li><kbd>Tab</kbd> speed · <kbd>P</kbd> shades · <kbd>F</kbd> fullscreen · <kbd>M</kbd> mute</li>
           <li><strong>Options</strong> — download / import battery saves and savestates</li>
-          <li><strong>Link cable</strong> — with two games open, connect to trade (Pokémon Red/Blue Cable Club)</li>
+          <li><strong>Link cable</strong> — connect both games to trade (works with mobile tabs)</li>
         </ul>
         <p class="legal">Provide legally obtained ROMs only. Nothing is bundled with this app. Battery saves and savestates are stored in this browser (and can be exported from Options). Link trading works best at 1× with both players in the Pokémon Center Cable Club.</p>
       </aside>
@@ -37,6 +49,11 @@ export function mountApp(root: HTMLElement): void {
   `;
 
   const sessionsHost = root.querySelector<HTMLElement>("#sessions")!;
+  const tabsBar = root.querySelector<HTMLElement>("#session-tabs")!;
+  const tabButtons = [
+    root.querySelector<HTMLButtonElement>('.session-tab[data-index="0"]')!,
+    root.querySelector<HTMLButtonElement>('.session-tab[data-index="1"]')!,
+  ];
   const addBtn = root.querySelector<HTMLButtonElement>("#add-instance")!;
   const removeBtn = root.querySelector<HTMLButtonElement>("#remove-instance")!;
   const linkBtn = root.querySelector<HTMLButtonElement>("#link-cable")!;
@@ -46,18 +63,46 @@ export function mountApp(root: HTMLElement): void {
 
   const sessions: EmulatorSession[] = [];
   let focused: EmulatorSession | null = null;
+  let activeTab = 0;
   let linked = false;
   let linkAcc = 0;
   let lastTs = performance.now();
 
-  function setFocus(session: EmulatorSession): void {
-    focused = session;
-    for (const s of sessions) s.setFocused(s === session);
+  const isDual = () => sessions.length === 2;
+
+  function updateHint(session: EmulatorSession): void {
     hint.textContent = `Controlling: ${session.emu.title || `Game ${session.id}`}`;
   }
 
+  function setFocus(session: EmulatorSession): void {
+    focused = session;
+    for (const s of sessions) s.setFocused(s === session);
+    updateHint(session);
+  }
+
+  function showTab(index: number): void {
+    if (index < 0 || index >= sessions.length) return;
+    activeTab = index;
+    const useTabs = mobile && isDual();
+    for (let i = 0; i < sessions.length; i++) {
+      const on = i === index;
+      const el = sessions[i]!.root;
+      el.hidden = useTabs && !on;
+      el.classList.toggle("tab-hidden", useTabs && !on);
+      tabButtons[i]!.setAttribute("aria-selected", on ? "true" : "false");
+      tabButtons[i]!.classList.toggle("active", on);
+    }
+    setFocus(sessions[index]!);
+  }
+
+  function focusSession(session: EmulatorSession): void {
+    const idx = sessions.indexOf(session);
+    if (mobile && isDual() && idx >= 0) showTab(idx);
+    else setFocus(session);
+  }
+
   function syncLinkUi(): void {
-    const dual = sessions.length >= 2;
+    const dual = isDual();
     linkBtn.hidden = !dual;
     linkStatus.hidden = !dual;
     if (!dual) {
@@ -78,10 +123,33 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
+  function refreshTabLabels(): void {
+    for (let i = 0; i < sessions.length; i++) {
+      tabButtons[i]!.textContent = sessions[i]!.emu.title || `Game ${i + 1}`;
+      tabButtons[i]!.hidden = false;
+    }
+  }
+
   function syncLayout(): void {
-    shell.classList.toggle("dual", sessions.length > 1);
-    addBtn.hidden = sessions.length >= 2;
-    removeBtn.hidden = sessions.length < 2;
+    const dual = isDual();
+    shell.classList.toggle("dual", !mobile && dual);
+    shell.classList.toggle("mobile-tabs", mobile && dual);
+    tabsBar.hidden = !(mobile && dual);
+    tabButtons[1]!.hidden = !dual;
+    addBtn.hidden = dual;
+    removeBtn.hidden = !dual;
+    refreshTabLabels();
+
+    if (!dual) {
+      for (const s of sessions) {
+        s.root.hidden = false;
+        s.root.classList.remove("tab-hidden");
+      }
+      activeTab = 0;
+    } else if (mobile) {
+      showTab(Math.min(activeTab, sessions.length - 1));
+    }
+
     syncLinkUi();
   }
 
@@ -94,7 +162,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function connectLink(): void {
-    if (sessions.length < 2) return;
+    if (!isDual()) return;
     const a = sessions[0]!;
     const b = sessions[1]!;
     if (!a.hasRom || !b.hasRom) {
@@ -116,54 +184,54 @@ export function mountApp(root: HTMLElement): void {
 
   function addSession(label: string): EmulatorSession {
     const session = new EmulatorSession(sessionsHost, label, {
-      onFocus: setFocus,
-      onStatus: () => {
-        /* status lives on the session panel */
-      },
+      onFocus: focusSession,
+      onStatus: refreshTabLabels,
     });
     sessions.push(session);
-    setFocus(session);
+    if (mobile && isDual()) showTab(sessions.length - 1);
+    else setFocus(session);
     syncLayout();
     return session;
   }
 
   function removeSecond(): void {
-    if (sessions.length < 2) return;
+    if (!isDual()) return;
     disconnectLink();
-    const second = sessions.pop()!;
-    if (focused === second) setFocus(sessions[0]!);
-    second.destroy();
+    sessions.pop()!.destroy();
+    activeTab = 0;
+    setFocus(sessions[0]!);
     syncLayout();
   }
 
   addSession("Game 1");
 
+  for (const btn of tabButtons) {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.index);
+      if (Number.isFinite(idx)) showTab(idx);
+    });
+  }
+
   addBtn.addEventListener("click", () => {
-    if (sessions.length >= 2) return;
-    addSession("Game 2");
+    if (!isDual()) addSession("Game 2");
   });
   removeBtn.addEventListener("click", removeSecond);
-
   linkBtn.addEventListener("click", () => {
     if (linked) disconnectLink();
     else connectLink();
   });
 
   function loop(now: number): void {
-    const dt = Math.min(now - lastTs, 50);
+    const dt = now - lastTs;
     lastTs = now;
 
-    if (linked && sessions.length === 2) {
-      // Lockstep: both machines advance the same emulated time (required for stable trades)
-      linkAcc += dt;
-      let frames = 0;
-      while (linkAcc >= FRAME_DURATION_MS && frames < 6) {
-        linkAcc -= FRAME_DURATION_MS;
+    if (linked && isDual()) {
+      const paced = takeFrameBudget(linkAcc, dt, 1);
+      linkAcc = paced.accumulatorMs;
+      for (let i = 0; i < paced.frames; i++) {
         sessions[0]!.lockstepFrame();
         sessions[1]!.lockstepFrame();
-        frames++;
       }
-      if (linkAcc > FRAME_DURATION_MS * 2) linkAcc = 0;
     } else {
       for (const s of sessions) s.tick(now);
     }
@@ -172,15 +240,8 @@ export function mountApp(root: HTMLElement): void {
   }
   requestAnimationFrame(loop);
 
-  window.addEventListener("keydown", (e) => {
-    if (!focused) return;
-    focused.handleKeyDown(e);
-  });
-  window.addEventListener("keyup", (e) => {
-    if (!focused) return;
-    focused.handleKeyUp(e);
-  });
-
+  window.addEventListener("keydown", (e) => focused?.handleKeyDown(e));
+  window.addEventListener("keyup", (e) => focused?.handleKeyUp(e));
   window.addEventListener("beforeunload", () => {
     disconnectLink();
     for (const s of sessions) s.flushSave();

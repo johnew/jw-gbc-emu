@@ -1,8 +1,5 @@
 import type { CartridgeHeader, SaveState } from "../types";
-import { base64ToUint8, uint8ToBase64 } from "../saves";
-
-const uint8ToB64 = uint8ToBase64;
-const b64ToUint8 = base64ToUint8;
+import { base64ToUint8, uint8ToBase64 } from "../encoding";
 
 function readTitle(rom: Uint8Array): string {
   let title = "";
@@ -82,13 +79,13 @@ class NoMbcCartridge implements Cartridge {
   exportState(): Record<string, number | boolean | string | null> {
     return {
       kind: "none",
-      sram: this.sram.length ? uint8ToB64(this.sram) : null,
+      sram: this.sram.length ? uint8ToBase64(this.sram) : null,
     };
   }
 
   importState(state: Record<string, number | boolean | string | null>): void {
     if (typeof state.sram === "string") {
-      const bytes = b64ToUint8(state.sram);
+      const bytes = base64ToUint8(state.sram);
       this.sram.fill(0);
       this.sram.set(bytes.subarray(0, Math.min(bytes.length, this.sram.length)));
     }
@@ -285,7 +282,7 @@ class Mbc3Cartridge implements Cartridge {
       romBank: this.romBank,
       ramBank: this.ramBank,
       ramEnabled: this.ramEnabled,
-      sram: uint8ToB64(this.sram),
+      sram: uint8ToBase64(this.sram),
       rtcS: this.rtcS,
       rtcM: this.rtcM,
       rtcH: this.rtcH,
@@ -306,7 +303,7 @@ class Mbc3Cartridge implements Cartridge {
     if (typeof state.ramBank === "number") this.ramBank = state.ramBank;
     if (typeof state.ramEnabled === "boolean") this.ramEnabled = state.ramEnabled;
     if (typeof state.sram === "string") {
-      const bytes = b64ToUint8(state.sram);
+      const bytes = base64ToUint8(state.sram);
       this.sram.fill(0);
       this.sram.set(bytes.subarray(0, Math.min(bytes.length, this.sram.length)));
     }

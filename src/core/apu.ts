@@ -1,5 +1,5 @@
 /** Minimal 4-channel Game Boy APU producing stereo PCM samples. */
-import { base64ToUint8, uint8ToBase64 } from "./saves";
+import { base64ToUint8, uint8ToBase64 } from "./encoding";
 
 export class Apu {
   nr10 = 0;

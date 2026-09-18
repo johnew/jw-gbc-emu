@@ -1,11 +1,15 @@
-import { IF_SERIAL } from "./types";
+/**
+ * Game Boy serial port (SB/SC) and same-page link cable.
+ *
+ * Bit periods use *wall-clock* T-cycles (≈4.19 MHz), not CGB double-speed CPU
+ * cycles — serial keeps running at normal speed in double-speed mode (Pan Docs).
+ */
 
-/** Cycles per bit at 8192 Hz internal clock (normal speed). */
-const CYCLES_PER_BIT_NORMAL = 512;
-/** CGB fast serial clock (SC bit1) ≈ 262144 Hz. */
-const CYCLES_PER_BIT_FAST = 16;
+const CYCLES_PER_BIT_NORMAL = 512; // 8192 Hz
+const CYCLES_PER_BIT_FAST = 16; // CGB SC.1 → ≈262144 Hz
 const BITS_PER_TRANSFER = 8;
 
+/** Connects two SerialPorts on the same page for trading. */
 export class LinkCable {
   private left: SerialPort | null = null;
   private right: SerialPort | null = null;
@@ -29,17 +33,29 @@ export class LinkCable {
     this.right = null;
   }
 
-  peerOf(port: SerialPort): SerialPort | null {
+  private peerOf(port: SerialPort): SerialPort | null {
     if (port === this.left) return this.right;
     if (port === this.right) return this.left;
     return null;
   }
+
+  peerReady(port: SerialPort): boolean {
+    const peer = this.peerOf(port);
+    return peer !== null && (peer.sc & 0x80) !== 0;
+  }
+
+  /** Master finished shifting: swap `sent` for peer's SB and clock the peer if ready. */
+  exchange(port: SerialPort, sent: number): number {
+    const peer = this.peerOf(port);
+    if (!peer) return 0xff;
+    const received = peer.sb;
+    if ((peer.sc & 0x80) !== 0) {
+      peer.acceptRemoteByte(sent);
+    }
+    return received;
+  }
 }
 
-/**
- * Game Boy serial port (SB/SC). When linked, the master's clock
- * exchanges a byte with the peer — enough for Pokémon Gen 1/2 trades.
- */
 export class SerialPort {
   sb = 0xff;
   /** Raw SC; bit7 = transfer, bit0 = internal clock, bit1 = CGB fast. */
@@ -49,8 +65,6 @@ export class SerialPort {
   private cyclesLeft = 0;
   private link: LinkCable | null = null;
   private requestInterrupt: (() => void) | null = null;
-  /** When linked, master waits until peer also has a transfer pending (helps Pokémon). */
-  syncWithPeer = true;
 
   setInterruptCallback(cb: () => void): void {
     this.requestInterrupt = cb;
@@ -58,8 +72,7 @@ export class SerialPort {
 
   attachLink(cable: LinkCable | null): void {
     this.link = cable;
-    // Cancel in-flight transfer on unplug
-    if (!cable && this.transferring) {
+    if (this.transferring) {
       this.transferring = false;
       this.cyclesLeft = 0;
       this.sc &= 0x7f;
@@ -82,7 +95,6 @@ export class SerialPort {
   }
 
   readSc(): number {
-    // Preserve bit0 (clock), bit1 (CGB speed), bit7 (transfer); unused bits read high
     return (this.sc & 0x83) | 0x7c;
   }
 
@@ -93,11 +105,8 @@ export class SerialPort {
   writeSc(value: number): void {
     this.sc = value & 0xff;
     if (value & 0x80) {
-      if (value & 0x01) {
-        // Internal clock — this side is master
-        this.beginMasterTransfer();
-      } else {
-        // External clock — wait for peer master to clock us
+      if (value & 0x01) this.beginMasterTransfer();
+      else {
         this.transferring = true;
         this.cyclesLeft = 0;
       }
@@ -114,40 +123,28 @@ export class SerialPort {
     this.cyclesLeft = perBit * BITS_PER_TRANSFER;
   }
 
-  /** Advance by CPU T-cycles. Only the master counts down. */
-  step(cycles: number): void {
-    if (!this.transferring) return;
-    if ((this.sc & 0x01) === 0) return; // slave: wait for peer
+  step(wallCycles: number): void {
+    if (!this.transferring || wallCycles <= 0) return;
+    if ((this.sc & 0x01) === 0) return;
 
-    if (this.syncWithPeer && this.link?.connected) {
-      const peer = this.link.peerOf(this);
-      // Wait until peer has also requested a transfer (Pokémon handshake)
-      if (peer && (peer.sc & 0x80) === 0) return;
-    }
+    if (this.link?.connected && !this.link.peerReady(this)) return;
 
-    this.cyclesLeft -= cycles;
+    this.cyclesLeft -= wallCycles;
     if (this.cyclesLeft <= 0) this.completeMasterTransfer();
   }
 
   private completeMasterTransfer(): void {
-    const peer = this.link?.peerOf(this) ?? null;
-    const sent = this.sb;
-    let received = 0xff;
-
-    if (peer) {
-      received = peer.sb;
-      // Clock the peer if it is waiting on an external transfer
-      if ((peer.sc & 0x80) !== 0 && (peer.sc & 0x01) === 0) {
-        peer.sb = sent;
-        peer.finishTransfer();
-      } else if ((peer.sc & 0x80) !== 0 && (peer.sc & 0x01) !== 0) {
-        // Both think they're master — still exchange (rare)
-        peer.sb = sent;
-        peer.finishTransfer();
-      }
+    if (!this.link) {
+      this.sb = 0xff;
+    } else {
+      this.sb = this.link.exchange(this, this.sb);
     }
+    this.finishTransfer();
+  }
 
-    this.sb = received;
+  /** Peer clocks us as slave. */
+  acceptRemoteByte(byte: number): void {
+    this.sb = byte & 0xff;
     this.finishTransfer();
   }
 
@@ -174,5 +171,3 @@ export class SerialPort {
     this.cyclesLeft = Number(state.cyclesLeft) || 0;
   }
 }
-
-export { IF_SERIAL };

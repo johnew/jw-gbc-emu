@@ -1,5 +1,3 @@
-import { IF_TIMER } from "./types";
-
 export class Timer {
   div = 0;
   tima = 0;
@@ -77,5 +75,3 @@ function tacFrequency(tac: number): number {
     default: return 256;
   }
 }
-
-export { IF_TIMER };

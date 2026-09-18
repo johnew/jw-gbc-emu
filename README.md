@@ -15,22 +15,29 @@ Open the URL Vite prints (usually `http://localhost:5173`) in **Firefox** or ano
 
 - Load `.gb` / `.gbc` ROMs from disk (nothing is bundled)
 - Display scale (2× / 3× / 4× / fit) and **fullscreen**
+- **Mobile-friendly** layout with on-screen D-pad / A / B / Start / Select
 - **Sound** via Web Audio (starts after a click/key)
-- **Speed** 1× / 2× / 4× (button or `Tab`)
+- **Speed** 1× / 2× / 4× / 6× (button or `Tab`)
 - DMG **shades** toggle (green / gray / pocket / brown)
 - Battery saves (+ RTC for Crystal) in `localStorage`
 - **Options** panel — download / import battery saves (`.sav`) and savestates
-- **Second game** — run two ROMs side by side (click a panel to focus controls)
+- **Second game** — desktop: two panels side by side; **mobile: in-page Game 1 / Game 2 tabs** to switch quickly
 - **Link cable** — connect both sessions to trade in Pokémon Red/Blue (Cable Club)
 
-## Trading (Red / Blue)
+## Trading
 
-1. Open a second game and load Red or Blue in both panels  
+### Red / Blue (same generation)
+
+1. Click **Add second game** and load Red or Blue in both (on mobile, switch with the Game 1 / Game 2 tabs)  
 2. Click **Connect link cable** (both run lockstep at 1×)  
-3. In each game, go to a Pokémon Center → **Cable Club** → trade center  
-4. Click a panel to control that game; complete the in-game trade prompts on both sides  
+3. Pokémon Center → **Cable Club** → trade center  
+4. Focus the game you need (panel click on desktop, tab on mobile); complete prompts on both sides  
 
-Disconnect the cable before closing the second game. Gen 1 ↔ Gen 1 works; Crystal↔Crystal may work similarly but is less tested.
+### Time Capsule (Red/Blue ↔ Gold/Silver/Crystal)
+
+Same link cable button. On the Gen 2 game use **Cable Club → Time Capsule**; on Gen 1 use the normal trade room. Serial timing follows wall-clock speed (important when Crystal is in CGB double-speed). Still experimental — soft-reset (`A+B+Start+Select`) if a side softlocks, then disconnect the cable.
+
+Disconnect the cable before closing the second game.
 
 ## Controls
 

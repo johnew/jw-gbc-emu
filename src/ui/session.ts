@@ -1,23 +1,15 @@
-import { Emulator, type Button } from "../core/emulator";
+import { Emulator } from "../core/emulator";
 import {
   DMG_PALETTE_IDS,
   DMG_PALETTE_LABELS,
-  FRAME_DURATION_MS,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
+  type Button,
   type DmgPaletteId,
 } from "../core/types";
 import { AudioOutput } from "../audio/output";
-import {
-  buildBackupBundle,
-  downloadBlob,
-  parseBackupBundle,
-  safeFilename,
-  saveSavestate,
-  uint8ToBase64,
-  base64ToUint8,
-} from "../core/saves";
-import type { EmulatorSavestate, SaveState } from "../core/types";
+import { isMobileLayout, takeFrameBudget } from "./layout";
+import { openOptionsModal } from "./options";
 
 const KEY_MAP: Record<string, Button> = {
   ArrowRight: "right",
@@ -36,8 +28,6 @@ const KEY_MAP: Record<string, Button> = {
   KeyJ: "b",
   KeyK: "a",
 };
-
-export { KEY_MAP };
 
 export interface SessionCallbacks {
   onFocus: (session: EmulatorSession) => void;
@@ -95,6 +85,23 @@ export class EmulatorSession {
       <div class="stage" tabindex="0">
         <canvas width="${SCREEN_WIDTH}" height="${SCREEN_HEIGHT}" aria-label="Game Boy screen"></canvas>
       </div>
+      <div class="touch-pad" aria-label="Touch controls">
+        <div class="touch-dpad" role="group" aria-label="D-pad">
+          <button type="button" class="touch-btn touch-up" data-btn="up" aria-label="Up">▲</button>
+          <button type="button" class="touch-btn touch-left" data-btn="left" aria-label="Left">◀</button>
+          <button type="button" class="touch-btn touch-right" data-btn="right" aria-label="Right">▶</button>
+          <button type="button" class="touch-btn touch-down" data-btn="down" aria-label="Down">▼</button>
+          <span class="touch-dpad-center" aria-hidden="true"></span>
+        </div>
+        <div class="touch-face" role="group" aria-label="Action buttons">
+          <button type="button" class="touch-btn touch-b" data-btn="b" aria-label="B">B</button>
+          <button type="button" class="touch-btn touch-a" data-btn="a" aria-label="A">A</button>
+        </div>
+        <div class="touch-system" role="group" aria-label="System buttons">
+          <button type="button" class="touch-btn touch-select" data-btn="select" aria-label="Select">Select</button>
+          <button type="button" class="touch-btn touch-start" data-btn="start" aria-label="Start">Start</button>
+        </div>
+      </div>
       <div class="toolbar">
         <label class="file-btn">
           Open ROM
@@ -146,6 +153,10 @@ export class EmulatorSession {
     this.titleEl = this.root.querySelector(".session-title")!;
 
     this.bindUi();
+    this.bindTouchPad();
+    if (isMobileLayout()) {
+      this.scaleSelect.value = "fit";
+    }
     this.applyScale();
     this.applyPalette("green");
     this.paint();
@@ -167,22 +178,15 @@ export class EmulatorSession {
   }
 
   tick(now: number): void {
-    const dt = Math.min(now - this.lastTs, 50);
+    const dt = now - this.lastTs;
     this.lastTs = now;
     if (!this.romLoaded) return;
     // When linked, the app drives lockstep frames instead
     if (this.emu.isLinked()) return;
 
-    const speed = this.emu.getSpeed();
-    this.frameAcc += dt * speed;
-    let frames = 0;
-    const maxCatchUp = 6 * speed;
-    while (this.frameAcc >= FRAME_DURATION_MS && frames < maxCatchUp) {
-      this.frameAcc -= FRAME_DURATION_MS;
-      this.advanceOneFrame();
-      frames++;
-    }
-    if (this.frameAcc > FRAME_DURATION_MS * 2) this.frameAcc = 0;
+    const paced = takeFrameBudget(this.frameAcc, dt, this.emu.getSpeed());
+    this.frameAcc = paced.accumulatorMs;
+    for (let i = 0; i < paced.frames; i++) this.advanceOneFrame();
   }
 
   /** Used for link-cable lockstep: both games advance one frame together. */
@@ -234,8 +238,8 @@ export class EmulatorSession {
     if (e.code === "Tab") {
       e.preventDefault();
       void this.unlockAudio();
-      const s = this.emu.cycleSpeed();
-      this.speedBtn.textContent = `Speed ${s}x`;
+      this.emu.cycleSpeed();
+      this.refreshSpeedButton();
       this.frameAcc = 0;
       return true;
     }
@@ -283,6 +287,25 @@ export class EmulatorSession {
     openOptionsModal(this);
   }
 
+  getSelectedSlot(): number {
+    return Number(this.slotSelect.value) || 1;
+  }
+
+  reportStatus(text: string): void {
+    this.setStatus(text);
+  }
+
+  refreshSlotHints(): void {
+    this.refreshSlotHint();
+  }
+
+  onSavestateApplied(): void {
+    this.frameAcc = 0;
+    this.paint();
+    this.paletteSelect.value = this.emu.getDmgPalette();
+    this.refreshSlotHint();
+  }
+
   private bindUi(): void {
     const focus = () => this.cb.onFocus(this);
     this.root.addEventListener("pointerdown", focus);
@@ -310,8 +333,8 @@ export class EmulatorSession {
 
     this.speedBtn.addEventListener("click", async () => {
       await this.unlockAudio();
-      const s = this.emu.cycleSpeed();
-      this.speedBtn.textContent = `Speed ${s}x`;
+      this.emu.cycleSpeed();
+      this.refreshSpeedButton();
       this.frameAcc = 0;
       focus();
     });
@@ -342,8 +365,60 @@ export class EmulatorSession {
     this.scaleSelect.addEventListener("change", () => this.applyScale());
   }
 
-  private currentSlot(): number {
-    return Number(this.slotSelect.value) || 1;
+  private bindTouchPad(): void {
+    const pad = this.root.querySelector<HTMLElement>(".touch-pad");
+    if (!pad) return;
+
+    const active = new Map<number, Button>();
+
+    const press = (pointerId: number, btn: Button, el: HTMLElement) => {
+      this.cb.onFocus(this);
+      void this.unlockAudio();
+      if (active.get(pointerId) === btn) return;
+      // Release previous button on this pointer if any
+      const prev = active.get(pointerId);
+      if (prev) this.emu.setButton(prev, false);
+      active.set(pointerId, btn);
+      this.emu.setButton(btn, true);
+      el.classList.add("pressed");
+    };
+
+    const release = (pointerId: number, el?: HTMLElement) => {
+      const btn = active.get(pointerId);
+      if (!btn) return;
+      active.delete(pointerId);
+      this.emu.setButton(btn, false);
+      el?.classList.remove("pressed");
+      // Clear pressed from any button still showing for this id
+      pad.querySelectorAll(".touch-btn.pressed").forEach((node) => {
+        const b = node as HTMLElement;
+        if (b.dataset.btn === btn) b.classList.remove("pressed");
+      });
+    };
+
+    pad.querySelectorAll<HTMLElement>("[data-btn]").forEach((el) => {
+      const name = el.dataset.btn as Button | undefined;
+      if (!name) return;
+
+      el.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.setPointerCapture(e.pointerId);
+        press(e.pointerId, name, el);
+      });
+      el.addEventListener("pointerup", (e) => {
+        e.preventDefault();
+        release(e.pointerId, el);
+      });
+      el.addEventListener("pointercancel", (e) => {
+        release(e.pointerId, el);
+      });
+      el.addEventListener("lostpointercapture", (e) => {
+        release(e.pointerId, el);
+      });
+      // Block context menu / callout on long-press
+      el.addEventListener("contextmenu", (e) => e.preventDefault());
+    });
   }
 
   private refreshSlotHint(): void {
@@ -352,7 +427,7 @@ export class EmulatorSession {
       return;
     }
     const occupied = this.emu.occupiedSlots();
-    const cur = this.currentSlot();
+    const cur = this.getSelectedSlot();
     const mark = occupied.includes(cur) ? "filled" : "empty";
     this.slotHint.textContent =
       occupied.length === 0
@@ -368,8 +443,11 @@ export class EmulatorSession {
       this.canvas.style.height = "";
     } else {
       const n = Number(mode);
-      this.canvas.style.width = `${SCREEN_WIDTH * n}px`;
-      this.canvas.style.height = `${SCREEN_HEIGHT * n}px`;
+      // Cap pixel size on narrow screens so the pad still fits
+      const maxW = Math.min(window.innerWidth - 32, SCREEN_WIDTH * n);
+      const scale = maxW / SCREEN_WIDTH;
+      this.canvas.style.width = `${Math.round(SCREEN_WIDTH * scale)}px`;
+      this.canvas.style.height = `${Math.round(SCREEN_HEIGHT * scale)}px`;
     }
   }
 
@@ -397,8 +475,27 @@ export class EmulatorSession {
   }
 
   private async toggleFullscreen(): Promise<void> {
-    if (!document.fullscreenElement) await this.stage.requestFullscreen();
-    else await document.exitFullscreen();
+    const el = this.stage as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+      webkitRequestFullScreen?: () => Promise<void> | void;
+    };
+    try {
+      if (!document.fullscreenElement) {
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+        else if (el.webkitRequestFullScreen) await el.webkitRequestFullScreen();
+        else {
+          // iOS Safari: no element fullscreen — use immersive CSS layout
+          document.documentElement.classList.toggle("immersive");
+          this.root.classList.toggle("immersive-session");
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      document.documentElement.classList.toggle("immersive");
+      this.root.classList.toggle("immersive-session");
+    }
   }
 
   private doSaveState(): void {
@@ -407,7 +504,7 @@ export class EmulatorSession {
       return;
     }
     try {
-      const slot = this.currentSlot();
+      const slot = this.getSelectedSlot();
       this.emu.saveStateToSlot(slot);
       this.refreshSlotHint();
       this.setStatus(`Saved state to slot ${slot}`);
@@ -422,292 +519,16 @@ export class EmulatorSession {
       return;
     }
     try {
-      const slot = this.currentSlot();
+      const slot = this.getSelectedSlot();
       const ok = this.emu.loadStateFromSlot(slot);
       if (!ok) {
         this.setStatus(`No savestate in slot ${slot}`);
         return;
       }
-      this.frameAcc = 0;
-      this.paint();
-      this.paletteSelect.value = this.emu.getDmgPalette();
-      this.refreshSlotHint();
+      this.onSavestateApplied();
       this.setStatus(`Loaded state from slot ${slot}`);
     } catch (err) {
       this.setStatus(`Load state failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-
-  // —— Export / import used by Options modal ——
-
-  downloadBatterySav(): void {
-    const bytes = this.emu.exportBatterySavBytes();
-    if (!bytes) {
-      this.setStatus("No battery save to download");
-      return;
-    }
-    const name = safeFilename(this.emu.title || "game");
-    const copy = new Uint8Array(bytes);
-    downloadBlob(`${name}.sav`, new Blob([copy], { type: "application/octet-stream" }));
-    this.setStatus(`Downloaded ${name}.sav`);
-  }
-
-  downloadBatteryJson(): void {
-    const data = this.emu.exportBatterySave();
-    if (!data) {
-      this.setStatus("No battery save to download");
-      return;
-    }
-    const name = safeFilename(this.emu.title || "game");
-    const payload = {
-      version: 1,
-      kind: "gbc-battery",
-      title: this.emu.title,
-      checksum: this.emu.getHeader()?.checksum,
-      sram: uint8ToBase64(data.sram),
-      rtc: data.rtc ?? null,
-    };
-    downloadBlob(
-      `${name}.battery.json`,
-      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
-    );
-    this.setStatus(`Downloaded ${name}.battery.json`);
-  }
-
-  downloadCurrentSavestate(): void {
-    const header = this.emu.getHeader();
-    if (!header) {
-      this.setStatus("Load a ROM first");
-      return;
-    }
-    const slot = this.currentSlot();
-    // Ensure latest in-memory state is what we export if user wants "current play"
-    // Export stored slot; also offer live snapshot into that download
-    const live = this.emu.createSavestate();
-    const name = safeFilename(header.title);
-    downloadBlob(
-      `${name}.slot${slot}.gbcstate.json`,
-      new Blob([JSON.stringify(live, null, 2)], { type: "application/json" }),
-    );
-    this.setStatus(`Downloaded live savestate as slot ${slot} file`);
-  }
-
-  downloadStoredSavestate(): void {
-    const header = this.emu.getHeader();
-    if (!header) {
-      this.setStatus("Load a ROM first");
-      return;
-    }
-    const slot = this.currentSlot();
-    const state = this.emu.getSavestateFromSlot(slot);
-    if (!state) {
-      this.setStatus(`No stored savestate in slot ${slot}`);
-      return;
-    }
-    const name = safeFilename(header.title);
-    downloadBlob(
-      `${name}.slot${slot}.gbcstate.json`,
-      new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }),
-    );
-    this.setStatus(`Downloaded slot ${slot} savestate`);
-  }
-
-  downloadFullBackup(): void {
-    const header = this.emu.getHeader();
-    if (!header) {
-      this.setStatus("Load a ROM first");
-      return;
-    }
-    this.emu.flushSave();
-    const battery = this.emu.exportBatterySave();
-    const bundle = buildBackupBundle(header, battery);
-    // Also include a fresh live snapshot as slot "live" metadata? Keep slots only.
-    const name = safeFilename(header.title);
-    downloadBlob(
-      `${name}.gbcbackup.json`,
-      new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }),
-    );
-    this.setStatus(`Downloaded full backup (${Object.keys(bundle.savestates).length} states)`);
-  }
-
-  async importFile(file: File): Promise<void> {
-    const header = this.emu.getHeader();
-    if (!header) throw new Error("Load a ROM before importing");
-
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith(".sav")) {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      this.emu.importBatterySavBytes(bytes);
-      this.setStatus(`Imported battery save from ${file.name}`);
-      return;
-    }
-
-    const text = await file.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new Error("File is not valid JSON (use .sav for raw battery saves)");
-    }
-
-    const obj = json as Record<string, unknown>;
-
-    // Full backup
-    const bundle = parseBackupBundle(json);
-    if (bundle) {
-      if (bundle.checksum !== header.checksum) {
-        throw new Error("Backup does not match the loaded ROM");
-      }
-      if (bundle.battery) {
-        const battery: SaveState = {
-          sram: base64ToUint8(bundle.battery.sram),
-          rtc: bundle.battery.rtc ?? undefined,
-        };
-        this.emu.importBatterySave(battery);
-      }
-      for (const [slotStr, state] of Object.entries(bundle.savestates)) {
-        const slot = Number(slotStr);
-        if (slot >= 1 && slot <= 9) {
-          saveSavestate(header, slot, state);
-        }
-      }
-      this.refreshSlotHint();
-      this.setStatus(`Imported backup (${Object.keys(bundle.savestates).length} states)`);
-      return;
-    }
-
-    // Battery JSON
-    if (obj.kind === "gbc-battery" && typeof obj.sram === "string") {
-      if (typeof obj.checksum === "number" && obj.checksum !== header.checksum) {
-        throw new Error("Battery save does not match the loaded ROM");
-      }
-      const battery: SaveState = {
-        sram: base64ToUint8(obj.sram),
-        rtc: (obj.rtc as SaveState["rtc"]) ?? undefined,
-      };
-      this.emu.importBatterySave(battery);
-      this.setStatus(`Imported battery JSON from ${file.name}`);
-      return;
-    }
-
-    // Savestate
-    if (obj.version === 1 && typeof obj.checksum === "number" && obj.cpu && obj.mmu) {
-      const state = obj as unknown as EmulatorSavestate;
-      if (state.checksum !== header.checksum) {
-        throw new Error("Savestate does not match the loaded ROM");
-      }
-      const slot = this.currentSlot();
-      this.emu.importSavestateToSlot(slot, state);
-      this.emu.applySavestate(state);
-      this.frameAcc = 0;
-      this.paint();
-      this.paletteSelect.value = this.emu.getDmgPalette();
-      this.refreshSlotHint();
-      this.setStatus(`Imported savestate into slot ${slot} and loaded it`);
-      return;
-    }
-
-    throw new Error("Unrecognized save file format");
-  }
-}
-
-function openOptionsModal(session: EmulatorSession): void {
-  const existing = document.querySelector(".options-overlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.className = "options-overlay";
-  overlay.innerHTML = `
-    <div class="options-panel" role="dialog" aria-label="Options">
-      <header class="options-header">
-        <h2>Options</h2>
-        <button type="button" class="options-close" aria-label="Close">×</button>
-      </header>
-      <p class="options-lead">Export or import battery saves and savestates for the focused game. Files can be backed up outside the browser.</p>
-
-      <section class="options-section">
-        <h3>Download</h3>
-        <div class="options-actions">
-          <button type="button" data-dl-sav>Battery save (.sav)</button>
-          <button type="button" data-dl-battery-json>Battery save (.json + RTC)</button>
-          <button type="button" data-dl-live-state>Current play → savestate file</button>
-          <button type="button" data-dl-slot-state>Stored slot savestate</button>
-          <button type="button" data-dl-backup>Full backup (all slots + battery)</button>
-        </div>
-      </section>
-
-      <section class="options-section">
-        <h3>Import</h3>
-        <p class="options-note">Accepts <code>.sav</code>, <code>.battery.json</code>, <code>.gbcstate.json</code>, or <code>.gbcbackup.json</code>. ROM must already be loaded and match.</p>
-        <label class="file-btn">
-          Choose file to import
-          <input type="file" accept=".sav,.json,.gbcstate.json,.gbcbackup.json,.battery.json" hidden data-import />
-        </label>
-      </section>
-
-      <p class="options-status" data-opt-status></p>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  const status = overlay.querySelector<HTMLElement>("[data-opt-status]")!;
-  const close = () => overlay.remove();
-
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
-  overlay.querySelector(".options-close")!.addEventListener("click", close);
-
-  overlay.querySelector("[data-dl-sav]")!.addEventListener("click", () => {
-    try {
-      session.downloadBatterySav();
-      status.textContent = "Battery .sav download started";
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  overlay.querySelector("[data-dl-battery-json]")!.addEventListener("click", () => {
-    try {
-      session.downloadBatteryJson();
-      status.textContent = "Battery JSON download started";
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  overlay.querySelector("[data-dl-live-state]")!.addEventListener("click", () => {
-    try {
-      session.downloadCurrentSavestate();
-      status.textContent = "Savestate download started";
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  overlay.querySelector("[data-dl-slot-state]")!.addEventListener("click", () => {
-    try {
-      session.downloadStoredSavestate();
-      status.textContent = "Stored slot download attempted";
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-  overlay.querySelector("[data-dl-backup]")!.addEventListener("click", () => {
-    try {
-      session.downloadFullBackup();
-      status.textContent = "Full backup download started";
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-  });
-
-  overlay.querySelector<HTMLInputElement>("[data-import]")!.addEventListener("change", async (e) => {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    try {
-      await session.importFile(file);
-      status.textContent = `Imported ${file.name}`;
-    } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
-    }
-    (e.target as HTMLInputElement).value = "";
-  });
 }

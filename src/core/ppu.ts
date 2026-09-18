@@ -1,6 +1,6 @@
 import { IF_LCD, IF_VBLANK, SCREEN_HEIGHT, SCREEN_WIDTH } from "./types";
 import type { DmgPaletteId } from "./types";
-import { base64ToUint8, uint8ToBase64 } from "./saves";
+import { base64ToUint8, uint8ToBase64 } from "./encoding";
 
 /** RGBA little-endian for ImageData */
 const DMG_PALETTES: Record<DmgPaletteId, readonly [number, number, number, number]> = {
@@ -288,31 +288,7 @@ export class Ppu {
 
     for (let x = 0; x < SCREEN_WIDTH; x++) {
       const lx = (this.scx + x) & 0xff;
-      const tileCol = (lx >> 3) & 31;
-      const mapIndex = mapBase + tileRow * 32 + tileCol;
-      const tileId = this.vram[mapIndex]!;
-      let attr = 0;
-      if (this.cgbMode) attr = this.vram[0x2000 + mapIndex]!;
-
-      let tileAddr: number;
-      if (signed) {
-        const tid = tileId > 127 ? tileId - 256 : tileId;
-        tileAddr = 0x1000 + tid * 16;
-      } else {
-        tileAddr = tileId * 16;
-      }
-
-      const bank = this.cgbMode ? ((attr >> 3) & 1) : 0;
-      const flipY = (attr & 0x40) !== 0;
-      const flipX = (attr & 0x20) !== 0;
-      const rowInTile = flipY ? 7 - (y & 7) : y & 7;
-      const base = bank * 0x2000 + tileAddr + rowInTile * 2;
-      const lo = this.vram[base]!;
-      const hi = this.vram[base + 1]!;
-      const bit = flipX ? lx & 7 : 7 - (lx & 7);
-      const colorId = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-      line[x] = colorId;
-      bgPri[x] = this.cgbMode ? (attr | (colorId << 8)) : colorId;
+      this.plotBgTilePixel(line, bgPri, x, lx, y, tileRow, mapBase, signed);
     }
   }
 
@@ -329,32 +305,44 @@ export class Ppu {
 
     for (let x = Math.max(0, wx); x < SCREEN_WIDTH; x++) {
       const lx = x - wx;
-      const tileCol = (lx >> 3) & 31;
-      const mapIndex = mapBase + tileRow * 32 + tileCol;
-      const tileId = this.vram[mapIndex]!;
-      let attr = 0;
-      if (this.cgbMode) attr = this.vram[0x2000 + mapIndex]!;
-
-      let tileAddr: number;
-      if (signed) {
-        const tid = tileId > 127 ? tileId - 256 : tileId;
-        tileAddr = 0x1000 + tid * 16;
-      } else {
-        tileAddr = tileId * 16;
-      }
-
-      const bank = this.cgbMode ? ((attr >> 3) & 1) : 0;
-      const flipY = (attr & 0x40) !== 0;
-      const flipX = (attr & 0x20) !== 0;
-      const rowInTile = flipY ? 7 - (y & 7) : y & 7;
-      const base = bank * 0x2000 + tileAddr + rowInTile * 2;
-      const lo = this.vram[base]!;
-      const hi = this.vram[base + 1]!;
-      const bit = flipX ? lx & 7 : 7 - (lx & 7);
-      const colorId = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-      line[x] = colorId;
-      bgPri[x] = this.cgbMode ? (attr | (colorId << 8)) : colorId;
+      this.plotBgTilePixel(line, bgPri, x, lx, y, tileRow, mapBase, signed);
     }
+  }
+
+  private plotBgTilePixel(
+    line: Uint8Array,
+    bgPri: Uint16Array,
+    screenX: number,
+    lx: number,
+    y: number,
+    tileRow: number,
+    mapBase: number,
+    signed: boolean,
+  ): void {
+    const tileCol = (lx >> 3) & 31;
+    const mapIndex = mapBase + tileRow * 32 + tileCol;
+    const tileId = this.vram[mapIndex]!;
+    const attr = this.cgbMode ? this.vram[0x2000 + mapIndex]! : 0;
+
+    let tileAddr: number;
+    if (signed) {
+      const tid = tileId > 127 ? tileId - 256 : tileId;
+      tileAddr = 0x1000 + tid * 16;
+    } else {
+      tileAddr = tileId * 16;
+    }
+
+    const bank = this.cgbMode ? ((attr >> 3) & 1) : 0;
+    const flipY = (attr & 0x40) !== 0;
+    const flipX = (attr & 0x20) !== 0;
+    const rowInTile = flipY ? 7 - (y & 7) : y & 7;
+    const base = bank * 0x2000 + tileAddr + rowInTile * 2;
+    const lo = this.vram[base]!;
+    const hi = this.vram[base + 1]!;
+    const bit = flipX ? lx & 7 : 7 - (lx & 7);
+    const colorId = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+    line[screenX] = colorId;
+    bgPri[screenX] = this.cgbMode ? (attr | (colorId << 8)) : colorId;
   }
 
   private renderSprites(line: Uint8Array, bgPri: Uint16Array): void {

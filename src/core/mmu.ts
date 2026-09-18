@@ -4,8 +4,8 @@ import type { Joypad } from "./joypad";
 import type { Ppu } from "./ppu";
 import type { Timer } from "./timer";
 import { SerialPort } from "./serial";
-import { base64ToUint8, uint8ToBase64 } from "./saves";
-import { IF_JOYPAD, IF_LCD, IF_SERIAL, IF_TIMER, IF_VBLANK } from "./types";
+import { base64ToUint8, uint8ToBase64 } from "./encoding";
+import { IF_SERIAL } from "./types";
 
 export class Mmu {
   cart!: Cartridge;
@@ -367,5 +367,3 @@ export class Mmu {
     this.hdma4 = this.hdmaDst & 0xf0;
   }
 }
-
-export { IF_VBLANK, IF_LCD, IF_TIMER, IF_SERIAL, IF_JOYPAD };
