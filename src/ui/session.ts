@@ -443,8 +443,9 @@ export class EmulatorSession {
       this.canvas.style.height = "";
     } else {
       const n = Number(mode);
-      // Cap pixel size on narrow screens so the pad still fits
-      const maxW = Math.min(window.innerWidth - 32, SCREEN_WIDTH * n);
+      // Cap to session width (not viewport) so mobile chrome resize doesn't thrash size
+      const hostW = this.root.clientWidth || window.innerWidth;
+      const maxW = Math.min(hostW - 24, SCREEN_WIDTH * n);
       const scale = maxW / SCREEN_WIDTH;
       this.canvas.style.width = `${Math.round(SCREEN_WIDTH * scale)}px`;
       this.canvas.style.height = `${Math.round(SCREEN_HEIGHT * scale)}px`;

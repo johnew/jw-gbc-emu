@@ -26,6 +26,7 @@ body {
   font-family: var(--font-body);
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
+  overflow-x: hidden;
 }
 
 #app {
@@ -206,9 +207,10 @@ body {
 }
 
 .stage.fit canvas {
-  width: min(100%, calc(100vh * 160 / 144));
+  width: min(100%, 480px);
   height: auto;
-  max-height: min(70vh, 55dvh);
+  aspect-ratio: 160 / 144;
+  max-height: none;
   image-rendering: pixelated;
 }
 
@@ -229,20 +231,21 @@ body {
   align-items: center;
 }
 
-/* —— On-screen touch controls —— */
+/* —— On-screen touch controls (Game Boy layout) —— */
 .touch-pad {
   display: none;
-  margin-top: 0.75rem;
+  margin-top: 0.85rem;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+  padding: 0.25rem 0.15rem 0.5rem;
 }
 
 .touch-dpad {
   position: relative;
   width: 148px;
   height: 148px;
-  margin: 0 auto;
+  flex-shrink: 0;
 }
 
 .touch-dpad .touch-btn {
@@ -269,39 +272,61 @@ body {
   pointer-events: none;
 }
 
+/* A above-right, B below-left — classic GBC diamond */
 .touch-face {
-  display: flex;
-  justify-content: center;
-  gap: 1.25rem;
-  margin-top: 1rem;
+  position: relative;
+  width: 118px;
+  height: 118px;
+  flex-shrink: 0;
+  margin: 0;
 }
 
 .touch-face .touch-btn {
-  width: 64px;
-  height: 64px;
+  position: absolute;
+  width: 58px;
+  height: 58px;
   border-radius: 50%;
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
+}
+
+.touch-b {
+  left: 0;
+  bottom: 4px;
 }
 
 .touch-a {
+  right: 0;
+  top: 4px;
   background: #3d5c28;
 }
 
 .touch-system {
   display: flex;
   justify-content: center;
-  gap: 1rem;
-  margin-top: 0.85rem;
+  align-items: center;
+  gap: 1.75rem;
+  margin-top: 0.35rem;
+  width: 100%;
 }
 
 .touch-system .touch-btn {
-  min-width: 88px;
-  height: 36px;
-  border-radius: 18px;
-  font-size: 0.8rem;
+  min-width: 76px;
+  height: 32px;
+  border-radius: 16px;
+  font-size: 0.72rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.touch-select {
+  transform: rotate(-28deg);
+}
+
+.touch-start {
+  transform: rotate(-28deg);
 }
 
 .touch-btn {
@@ -326,8 +351,56 @@ body {
 }
 
 @media (pointer: coarse), (max-width: 768px) {
+  .shell {
+    padding-top: 0.75rem;
+  }
+
+  .top h1 {
+    font-size: 1.45rem;
+  }
+
+  .tagline {
+    font-size: 0.85rem;
+    margin-bottom: 0.65rem;
+  }
+
+  /* Stable sizing: avoid vh/dvh so the screen doesn't jump when the URL bar moves */
+  .stage {
+    padding: 8px;
+  }
+
+  .stage.fit canvas,
+  .stage canvas {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: 160 / 144;
+    max-height: none;
+  }
+
   .touch-pad {
-    display: block;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "dpad face"
+      "sys sys";
+    align-items: center;
+    column-gap: 0.75rem;
+    row-gap: 0.65rem;
+  }
+
+  .touch-dpad {
+    grid-area: dpad;
+    justify-self: start;
+  }
+
+  .touch-face {
+    grid-area: face;
+    justify-self: end;
+  }
+
+  .touch-system {
+    grid-area: sys;
   }
 
   .toolbar button,
@@ -356,37 +429,74 @@ body {
   .session-focus-tag {
     display: none;
   }
+
+  .help {
+    margin-top: 1.25rem;
+  }
 }
 
-/* Landscape phone: D-pad left, actions right */
+/* Landscape phone: keep D-pad left / actions right, tighter screen */
 @media (pointer: coarse) and (orientation: landscape),
   (max-width: 900px) and (orientation: landscape) {
   .touch-pad {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
-    gap: 0.5rem 1rem;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "dpad sys face";
+    gap: 0.35rem 1rem;
     align-items: center;
   }
 
   .touch-dpad {
-    grid-row: 1 / 3;
-    margin: 0;
+    grid-area: dpad;
+    width: 128px;
+    height: 128px;
+  }
+
+  .touch-dpad .touch-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .touch-up { left: 43px; }
+  .touch-down { left: 43px; }
+  .touch-left { top: 43px; }
+  .touch-right { top: 43px; }
+
+  .touch-dpad-center {
+    top: 43px;
+    left: 43px;
+    width: 42px;
+    height: 42px;
   }
 
   .touch-face {
-    margin-top: 0;
-    justify-content: flex-end;
+    grid-area: face;
+    width: 100px;
+    height: 100px;
+  }
+
+  .touch-face .touch-btn {
+    width: 50px;
+    height: 50px;
   }
 
   .touch-system {
-    grid-column: 2;
+    grid-area: sys;
+    flex-direction: column;
+    gap: 0.65rem;
     margin-top: 0;
-    justify-content: flex-end;
+    width: auto;
   }
 
-  .stage.fit canvas {
-    max-height: 62dvh;
+  .touch-select,
+  .touch-start {
+    transform: rotate(-28deg);
+  }
+
+  .stage.fit canvas,
+  .stage canvas {
+    width: min(100%, calc(42svh * 160 / 144));
+    max-height: 42svh;
   }
 }
 
@@ -416,8 +526,8 @@ html.immersive .immersive-session {
 
 html.immersive .immersive-session .stage.fit canvas,
 html.immersive .immersive-session .stage canvas {
-  max-height: 50dvh;
-  width: min(100%, calc(50dvh * 160 / 144));
+  max-height: 48svh;
+  width: min(100%, calc(48svh * 160 / 144));
 }
 
 .savestate-bar {
