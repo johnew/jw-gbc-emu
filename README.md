@@ -2,6 +2,8 @@
 
 Browser-based Game Boy / Game Boy Color emulator written in TypeScript. Aimed at Pokémon Red, Blue, and Crystal.
 
+The emulator is available here: https://johnew.github.io/jw-gbc-emu/ 
+
 ## Run
 
 ```bash
