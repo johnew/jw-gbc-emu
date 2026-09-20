@@ -11,6 +11,7 @@ import {
 import { AudioOutput } from "../audio/output";
 import { isMobileLayout, takeFrameBudget } from "./layout";
 import type { LinkUiState } from "./linkUi";
+import { saveLastRom } from "./lastRom";
 import { openOptionsModal } from "./options";
 import { errorText } from "./util";
 
@@ -48,6 +49,8 @@ export class EmulatorSession {
   readonly root: HTMLElement;
   readonly emu = new Emulator();
   readonly audio = new AudioOutput();
+  /** Persistence slot for last-ROM restore (0 = Game 1, 1 = Game 2). */
+  romSlot = 0;
 
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -74,8 +77,6 @@ export class EmulatorSession {
   private lastTs = performance.now();
   private focused = false;
   private keepPitchAudio = false;
-  /** Counts emulated frames so we can drop audio when keep-pitch turbo is on. */
-  private audioFrameGate = 0;
   private readonly cb: SessionCallbacks;
 
   constructor(host: HTMLElement, label: string, cb: SessionCallbacks) {
@@ -166,7 +167,7 @@ export class EmulatorSession {
                 <input type="checkbox" data-keep-pitch />
                 Normal-pitch turbo
               </label>
-              <p class="experimental-hint">Keeps music near 1× while the game runs at 2× or 4×. Sound can drift from the screen and may glitch — try 2× first.</p>
+              <p class="experimental-hint">Hack to avoid chipmunk music at 2×/4×. Plays at normal speed (sound lags the game), then soft-catches up about once a minute. Best at 2×.</p>
             </details>
             <div class="mobile-global-actions">
               <button type="button" data-add-game>Add second game</button>
@@ -252,6 +253,20 @@ export class EmulatorSession {
     this.frameAcc = 0;
   }
 
+  /** Tab hidden — stop audio and avoid catch-up bursts on return. */
+  pauseForBackground(): void {
+    void this.audio.suspend();
+    this.frameAcc = 0;
+    this.flushSave();
+  }
+
+  /** Tab visible again — resync clocks and wake audio. */
+  resumeFromBackground(now: number): void {
+    this.syncClock(now);
+    this.audio.resetKeepPitchQueue();
+    void this.audio.resume();
+  }
+
   /**
    * Re-apply canvas sizing after mobile/desktop or tab switches.
    * The first session can keep stale inline sizes if it was created before
@@ -276,19 +291,11 @@ export class EmulatorSession {
   }
 
   /**
-   * Normal turbo raises pitch via playbackRate.
-   * Keep-pitch mode plays at 1× and keeps ~1/speed of the frames so the
-   * queue doesn't overrun (SFX can drift — alpha).
+   * Normal turbo = chipmunk. Keep-pitch = 1× audio that lags (experimental).
    */
   private pushFrameAudio(samples: Float32Array): void {
     const speed = this.emu.getSpeed();
-    if (this.keepPitchAudio && speed > 1) {
-      this.audioFrameGate = (this.audioFrameGate + 1) % speed;
-      if (this.audioFrameGate !== 0) return;
-      this.audio.pushSamples(samples, 1);
-      return;
-    }
-    this.audio.pushSamples(samples, speed);
+    this.audio.pushSamples(samples, speed, this.keepPitchAudio);
   }
 
   refreshSpeedButton(): void {
@@ -325,6 +332,7 @@ export class EmulatorSession {
       this.emu.cycleSpeed();
       this.refreshSpeedButton();
       this.frameAcc = 0;
+      this.audio.resetKeepPitchQueue();
       return true;
     }
     if (e.code === "KeyP") {
@@ -405,6 +413,28 @@ export class EmulatorSession {
     this.mobileTitleEl.textContent = name;
   }
 
+  /** Load a ROM from bytes (file picker or restored last ROM). */
+  async loadRomBytes(buf: Uint8Array, fileName?: string): Promise<void> {
+    await this.unlockAudio();
+    this.emu.loadRom(buf);
+    this.romLoaded = true;
+    this.lastTs = performance.now();
+    this.frameAcc = 0;
+    this.refreshSlotHints();
+    this.setDisplayTitle(this.emu.title || "Game");
+    this.syncShadeAvailability();
+    this.refreshDisplayLayout();
+    this.setStatus(`${this.emu.title}${this.emu.isCgb ? " (CGB)" : " (DMG)"} — playing`);
+    this.cb.onRomMetaChanged(this);
+    if (fileName) {
+      try {
+        await saveLastRom(this.romSlot, buf, fileName);
+      } catch (err) {
+        console.warn("Failed to remember last ROM:", err);
+      }
+    }
+  }
+
   private bindUi(): void {
     const focus = () => this.cb.onFocus(this);
     this.root.addEventListener("pointerdown", focus);
@@ -413,18 +443,8 @@ export class EmulatorSession {
     this.root.querySelector<HTMLInputElement>("[data-rom]")!.addEventListener("change", async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-      await this.unlockAudio();
       const buf = new Uint8Array(await file.arrayBuffer());
-      this.emu.loadRom(buf);
-      this.romLoaded = true;
-      this.lastTs = performance.now();
-      this.frameAcc = 0;
-      this.refreshSlotHints();
-      this.setDisplayTitle(this.emu.title || "Game");
-      this.syncShadeAvailability();
-      this.refreshDisplayLayout();
-      this.setStatus(`${this.emu.title}${this.emu.isCgb ? " (CGB)" : " (DMG)"} — playing`);
-      this.cb.onRomMetaChanged(this);
+      await this.loadRomBytes(buf, file.name);
       focus();
     });
 
@@ -438,6 +458,7 @@ export class EmulatorSession {
       this.emu.cycleSpeed();
       this.refreshSpeedButton();
       this.frameAcc = 0;
+      this.audio.resetKeepPitchQueue();
       focus();
     });
 
@@ -467,20 +488,11 @@ export class EmulatorSession {
     this.scaleSelect.addEventListener("change", () => this.applyScale());
 
     const keepPitch = this.root.querySelector<HTMLInputElement>("[data-keep-pitch]")!;
-    try {
-      keepPitch.checked = localStorage.getItem("gbc-keep-pitch-audio") === "1";
-    } catch {
-      /* private mode */
-    }
-    this.keepPitchAudio = keepPitch.checked;
+    keepPitch.checked = false;
+    this.keepPitchAudio = false;
     keepPitch.addEventListener("change", () => {
       this.keepPitchAudio = keepPitch.checked;
-      this.audioFrameGate = 0;
-      try {
-        localStorage.setItem("gbc-keep-pitch-audio", keepPitch.checked ? "1" : "0");
-      } catch {
-        /* private mode */
-      }
+      this.audio.resetKeepPitchQueue();
     });
   }
 

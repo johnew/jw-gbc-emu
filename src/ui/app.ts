@@ -1,6 +1,7 @@
 import { EmulatorSession } from "./session";
 import { bindShellLayout, isMobileLayout, takeFrameBudget } from "./layout";
 import { buildLinkUiState } from "./linkUi";
+import { loadLastRom } from "./lastRom";
 
 export function mountApp(root: HTMLElement): void {
   root.innerHTML = `
@@ -220,7 +221,10 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function ensureSecondSession(): void {
-    if (!isDual()) addSession("Game 2");
+    if (!isDual()) {
+      const session = addSession("Game 2");
+      void restoreLastRom(session);
+    }
   }
 
   function addSession(label: string): EmulatorSession {
@@ -231,6 +235,7 @@ export function mountApp(root: HTMLElement): void {
       onRemoveGame: removeSecond,
       onToggleLink: toggleLink,
     });
+    session.romSlot = sessions.length;
     sessions.push(session);
     if (mobile() && isDual()) showTab(sessions.length - 1);
     else setFocus(session);
@@ -238,7 +243,21 @@ export function mountApp(root: HTMLElement): void {
     return session;
   }
 
+  async function restoreLastRom(session: EmulatorSession): Promise<void> {
+    try {
+      const saved = await loadLastRom(session.romSlot);
+      if (!saved) return;
+      await session.loadRomBytes(saved.rom, saved.fileName);
+      session.reportStatus(
+        `${session.emu.title}${session.emu.isCgb ? " (CGB)" : " (DMG)"} — restored last ROM`,
+      );
+    } catch (err) {
+      console.warn("Failed to restore last ROM:", err);
+    }
+  }
+
   addSession("Game 1");
+  void restoreLastRom(sessions[0]!);
 
   for (const btn of tabButtons) {
     btn.addEventListener("click", () => {
@@ -252,6 +271,11 @@ export function mountApp(root: HTMLElement): void {
   linkBtn.addEventListener("click", toggleLink);
 
   function loop(now: number): void {
+    if (document.hidden) {
+      requestAnimationFrame(loop);
+      return;
+    }
+
     const dt = now - lastTs;
     lastTs = now;
 
@@ -269,6 +293,17 @@ export function mountApp(root: HTMLElement): void {
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      for (const s of sessions) s.pauseForBackground();
+      return;
+    }
+    const now = performance.now();
+    lastTs = now;
+    linkAcc = 0;
+    for (const s of sessions) s.resumeFromBackground(now);
+  });
 
   window.addEventListener("keydown", (e) => focused?.handleKeyDown(e));
   window.addEventListener("keyup", (e) => focused?.handleKeyUp(e));
