@@ -254,6 +254,65 @@ body {
   margin-top: 0.5rem;
 }
 
+.experimental-panel {
+  margin-top: 0.65rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed #3d4c30;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.experimental-panel summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.experimental-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.experimental-panel[open] summary {
+  margin-bottom: 0.45rem;
+}
+
+.alpha-tag {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid #8a6a28;
+  background: rgba(180, 130, 40, 0.18);
+  color: #d4b56a;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.experimental-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--ink);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.experimental-check input {
+  margin-top: 0.2rem;
+}
+
+.experimental-hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 /* —— On-screen touch controls (Game Boy layout) —— */
 .touch-dpad {
   position: relative;
@@ -705,6 +764,15 @@ html.gbc-mobile #app {
   grid-column: 1 / -1;
   font-size: 0.75rem;
   margin: 0;
+}
+
+.shell.shell-mobile .experimental-panel {
+  margin-top: 0.55rem;
+}
+
+.shell.shell-mobile .experimental-check {
+  min-height: 44px;
+  align-items: center;
 }
 
 .shell.shell-mobile .mobile-global-actions {

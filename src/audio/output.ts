@@ -19,8 +19,8 @@ export class AudioOutput {
 
   /**
    * Push interleaved stereo float samples [-1, 1].
-   * `playbackSpeed` compresses the buffer in wall-clock time so turbo stays in sync
-   * (pitch rises with speed, same as classic emulators).
+   * `playbackSpeed` > 1 compresses playback in wall-clock time (classic turbo pitch-up).
+   * Pass 1 with thinned input for normal-pitch turbo.
    */
   pushSamples(interleaved: Float32Array, playbackSpeed = 1): void {
     if (!this.ctx || this.muted || interleaved.length < 2) return;

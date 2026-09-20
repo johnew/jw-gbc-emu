@@ -73,6 +73,9 @@ export class EmulatorSession {
   private frameAcc = 0;
   private lastTs = performance.now();
   private focused = false;
+  private keepPitchAudio = false;
+  /** Counts emulated frames so we can drop audio when keep-pitch turbo is on. */
+  private audioFrameGate = 0;
   private readonly cb: SessionCallbacks;
 
   constructor(host: HTMLElement, label: string, cb: SessionCallbacks) {
@@ -157,6 +160,14 @@ export class EmulatorSession {
               </label>
               <span class="slot-hint" data-slot-hint></span>
             </div>
+            <details class="experimental-panel">
+              <summary>Experimental <span class="alpha-tag">alpha</span></summary>
+              <label class="experimental-check">
+                <input type="checkbox" data-keep-pitch />
+                Normal-pitch turbo
+              </label>
+              <p class="experimental-hint">Keeps music near 1× while the game runs at 2× or 4×. Sound can drift from the screen and may glitch — try 2× first.</p>
+            </details>
             <div class="mobile-global-actions">
               <button type="button" data-add-game>Add second game</button>
               <button type="button" data-remove-game hidden>Close second game</button>
@@ -260,8 +271,24 @@ export class EmulatorSession {
   private advanceOneFrame(): void {
     this.emu.runFrame();
     const samples = this.emu.takeAudioSamples();
-    this.audio.pushSamples(samples, this.emu.getSpeed());
+    this.pushFrameAudio(samples);
     this.paint();
+  }
+
+  /**
+   * Normal turbo raises pitch via playbackRate.
+   * Keep-pitch mode plays at 1× and keeps ~1/speed of the frames so the
+   * queue doesn't overrun (SFX can drift — alpha).
+   */
+  private pushFrameAudio(samples: Float32Array): void {
+    const speed = this.emu.getSpeed();
+    if (this.keepPitchAudio && speed > 1) {
+      this.audioFrameGate = (this.audioFrameGate + 1) % speed;
+      if (this.audioFrameGate !== 0) return;
+      this.audio.pushSamples(samples, 1);
+      return;
+    }
+    this.audio.pushSamples(samples, speed);
   }
 
   refreshSpeedButton(): void {
@@ -438,6 +465,23 @@ export class EmulatorSession {
       this.applyPalette(this.paletteSelect.value as DmgPaletteId);
     });
     this.scaleSelect.addEventListener("change", () => this.applyScale());
+
+    const keepPitch = this.root.querySelector<HTMLInputElement>("[data-keep-pitch]")!;
+    try {
+      keepPitch.checked = localStorage.getItem("gbc-keep-pitch-audio") === "1";
+    } catch {
+      /* private mode */
+    }
+    this.keepPitchAudio = keepPitch.checked;
+    keepPitch.addEventListener("change", () => {
+      this.keepPitchAudio = keepPitch.checked;
+      this.audioFrameGate = 0;
+      try {
+        localStorage.setItem("gbc-keep-pitch-audio", keepPitch.checked ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+    });
   }
 
   private syncShadeAvailability(): void {
