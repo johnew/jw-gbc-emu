@@ -1,9 +1,8 @@
 import { EmulatorSession } from "./session";
-import { isMobileLayout, takeFrameBudget } from "./layout";
+import { bindShellLayout, isMobileLayout, takeFrameBudget } from "./layout";
+import { buildLinkUiState } from "./linkUi";
 
 export function mountApp(root: HTMLElement): void {
-  const mobile = isMobileLayout();
-
   root.innerHTML = `
     <div class="shell">
       <header class="top">
@@ -16,11 +15,7 @@ export function mountApp(root: HTMLElement): void {
         <button type="button" id="remove-instance" hidden>Close second game</button>
         <button type="button" id="link-cable" hidden>Connect link cable</button>
         <span class="link-status" id="link-status" hidden></span>
-        <span class="global-hint" id="global-hint">${
-          mobile
-            ? "Use on-screen buttons to play. With two games, switch tabs above the screen."
-            : "Tap a screen to control it. On phones, use the on-screen buttons."
-        }</span>
+        <span class="global-hint" id="global-hint">Tap a screen to control it. On phones, tap ⚙ for settings.</span>
       </div>
 
       <div class="session-tabs" id="session-tabs" hidden role="tablist" aria-label="Games">
@@ -33,7 +28,7 @@ export function mountApp(root: HTMLElement): void {
       <aside class="help">
         <h2>Controls</h2>
         <ul>
-          <li><strong>Mobile:</strong> on-screen D-pad, A/B, Start/Select · with two games, use the <strong>Game 1 / Game 2</strong> tabs to switch</li>
+          <li><strong>Mobile:</strong> full-screen Game Boy controls · tap <strong>⚙</strong> for settings · rotate for a larger screen</li>
           <li>Tap/click a game panel to focus it (desktop dual view)</li>
           <li><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> or <kbd>WASD</kbd> — D-pad</li>
           <li><kbd>Z</kbd> / <kbd>K</kbd> — A &nbsp; <kbd>X</kbd> / <kbd>J</kbd> — B</li>
@@ -67,11 +62,18 @@ export function mountApp(root: HTMLElement): void {
   let linked = false;
   let linkAcc = 0;
   let lastTs = performance.now();
+  let linkErrorHint: string | undefined;
 
+  const mobile = () => isMobileLayout();
   const isDual = () => sessions.length === 2;
 
+  function sessionLabel(index: number): string {
+    return sessions[index]?.emu.title || `Game ${index + 1}`;
+  }
+
   function updateHint(session: EmulatorSession): void {
-    hint.textContent = `Controlling: ${session.emu.title || `Game ${session.id}`}`;
+    const idx = sessions.indexOf(session);
+    hint.textContent = `Controlling: ${sessionLabel(idx >= 0 ? idx : 0)}`;
   }
 
   function setFocus(session: EmulatorSession): void {
@@ -83,7 +85,7 @@ export function mountApp(root: HTMLElement): void {
   function showTab(index: number): void {
     if (index < 0 || index >= sessions.length) return;
     activeTab = index;
-    const useTabs = mobile && isDual();
+    const useTabs = mobile() && isDual();
     for (let i = 0; i < sessions.length; i++) {
       const on = i === index;
       const el = sessions[i]!.root;
@@ -91,74 +93,95 @@ export function mountApp(root: HTMLElement): void {
       el.classList.toggle("tab-hidden", useTabs && !on);
       tabButtons[i]!.setAttribute("aria-selected", on ? "true" : "false");
       tabButtons[i]!.classList.toggle("active", on);
+      if (!on) sessions[i]!.closeSettingsSheet();
     }
     setFocus(sessions[index]!);
+    const onMobile = mobile();
+    requestAnimationFrame(() => {
+      sessions[index]?.refreshDisplayLayout(onMobile);
+    });
   }
 
   function focusSession(session: EmulatorSession): void {
     const idx = sessions.indexOf(session);
-    if (mobile && isDual() && idx >= 0) showTab(idx);
+    if (mobile() && isDual() && idx >= 0) showTab(idx);
     else setFocus(session);
   }
 
-  function syncLinkUi(): void {
-    const dual = isDual();
-    linkBtn.hidden = !dual;
-    linkStatus.hidden = !dual;
-    if (!dual) {
-      linked = false;
-      linkBtn.textContent = "Connect link cable";
-      linkStatus.textContent = "";
-      linkStatus.classList.remove("on");
-      return;
-    }
-    if (linked) {
-      linkBtn.textContent = "Disconnect link cable";
-      linkStatus.textContent = "Link cable connected — trading enabled (lockstep 1×)";
-      linkStatus.classList.add("on");
-    } else {
-      linkBtn.textContent = "Connect link cable";
-      linkStatus.textContent = "Link cable disconnected";
-      linkStatus.classList.remove("on");
-    }
+  function applyLinkUi(errorHint?: string): void {
+    if (!isDual()) linked = false;
+    const state = buildLinkUiState({
+      dual: isDual(),
+      linked,
+      errorHint: isDual() ? errorHint : undefined,
+    });
+    linkBtn.hidden = !state.dual;
+    linkStatus.hidden = !state.dual;
+    linkBtn.textContent = state.linkLabel;
+    linkStatus.textContent = state.linkHint;
+    linkStatus.classList.toggle("on", state.linked);
+    for (const s of sessions) s.syncMultiplayerUi(state);
   }
 
   function refreshTabLabels(): void {
     for (let i = 0; i < sessions.length; i++) {
-      tabButtons[i]!.textContent = sessions[i]!.emu.title || `Game ${i + 1}`;
+      tabButtons[i]!.textContent = sessionLabel(i);
       tabButtons[i]!.hidden = false;
+    }
+  }
+
+  function revealAllSessions(): void {
+    for (const s of sessions) {
+      s.root.hidden = false;
+      s.root.classList.remove("tab-hidden");
     }
   }
 
   function syncLayout(): void {
     const dual = isDual();
-    shell.classList.toggle("dual", !mobile && dual);
-    shell.classList.toggle("mobile-tabs", mobile && dual);
-    tabsBar.hidden = !(mobile && dual);
+    const onMobile = mobile();
+    shell.classList.toggle("dual", !onMobile && dual);
+    shell.classList.toggle("mobile-tabs", onMobile && dual);
+    tabsBar.hidden = !(onMobile && dual);
     tabButtons[1]!.hidden = !dual;
     addBtn.hidden = dual;
     removeBtn.hidden = !dual;
     refreshTabLabels();
 
     if (!dual) {
-      for (const s of sessions) {
-        s.root.hidden = false;
-        s.root.classList.remove("tab-hidden");
-      }
+      revealAllSessions();
       activeTab = 0;
-    } else if (mobile) {
+    } else if (onMobile) {
       showTab(Math.min(activeTab, sessions.length - 1));
+    } else {
+      revealAllSessions();
     }
 
-    syncLinkUi();
+    for (const s of sessions) s.refreshDisplayLayout(onMobile);
+    applyLinkUi(linkErrorHint);
   }
+
+  bindShellLayout(shell, (onMobile) => {
+    const dual = isDual();
+    const wantTabs = onMobile && dual;
+    const wantDual = !onMobile && dual;
+    if (
+      shell.classList.contains("mobile-tabs") !== wantTabs ||
+      shell.classList.contains("dual") !== wantDual
+    ) {
+      syncLayout();
+    } else {
+      for (const s of sessions) s.refreshDisplayLayout(onMobile);
+    }
+  });
 
   function disconnectLink(): void {
     if (!linked) return;
     for (const s of sessions) s.emu.unlink();
     linked = false;
     linkAcc = 0;
-    syncLinkUi();
+    linkErrorHint = undefined;
+    applyLinkUi();
   }
 
   function connectLink(): void {
@@ -166,9 +189,8 @@ export function mountApp(root: HTMLElement): void {
     const a = sessions[0]!;
     const b = sessions[1]!;
     if (!a.hasRom || !b.hasRom) {
-      linkStatus.hidden = false;
-      linkStatus.textContent = "Load a ROM in both games before connecting the link cable";
-      linkStatus.classList.remove("on");
+      linkErrorHint = "Load a ROM in both games before connecting the link cable";
+      applyLinkUi(linkErrorHint);
       return;
     }
     a.emu.linkWith(b.emu);
@@ -179,19 +201,13 @@ export function mountApp(root: HTMLElement): void {
     b.syncClock(now);
     linkAcc = 0;
     linked = true;
-    syncLinkUi();
+    linkErrorHint = undefined;
+    applyLinkUi();
   }
 
-  function addSession(label: string): EmulatorSession {
-    const session = new EmulatorSession(sessionsHost, label, {
-      onFocus: focusSession,
-      onStatus: refreshTabLabels,
-    });
-    sessions.push(session);
-    if (mobile && isDual()) showTab(sessions.length - 1);
-    else setFocus(session);
-    syncLayout();
-    return session;
+  function toggleLink(): void {
+    if (linked) disconnectLink();
+    else connectLink();
   }
 
   function removeSecond(): void {
@@ -203,6 +219,25 @@ export function mountApp(root: HTMLElement): void {
     syncLayout();
   }
 
+  function ensureSecondSession(): void {
+    if (!isDual()) addSession("Game 2");
+  }
+
+  function addSession(label: string): EmulatorSession {
+    const session = new EmulatorSession(sessionsHost, label, {
+      onFocus: focusSession,
+      onRomMetaChanged: refreshTabLabels,
+      onAddGame: ensureSecondSession,
+      onRemoveGame: removeSecond,
+      onToggleLink: toggleLink,
+    });
+    sessions.push(session);
+    if (mobile() && isDual()) showTab(sessions.length - 1);
+    else setFocus(session);
+    syncLayout();
+    return session;
+  }
+
   addSession("Game 1");
 
   for (const btn of tabButtons) {
@@ -212,14 +247,9 @@ export function mountApp(root: HTMLElement): void {
     });
   }
 
-  addBtn.addEventListener("click", () => {
-    if (!isDual()) addSession("Game 2");
-  });
+  addBtn.addEventListener("click", ensureSecondSession);
   removeBtn.addEventListener("click", removeSecond);
-  linkBtn.addEventListener("click", () => {
-    if (linked) disconnectLink();
-    else connectLink();
-  });
+  linkBtn.addEventListener("click", toggleLink);
 
   function loop(now: number): void {
     const dt = now - lastTs;

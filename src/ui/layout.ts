@@ -1,8 +1,49 @@
 import { FRAME_DURATION_MS } from "../core/types";
 
-/** Match CSS mobile / coarse-pointer breakpoints. */
+/**
+ * True for phones / DevTools device mode.
+ * Uses a wide max-width so landscape phone viewports (often >768px) still count,
+ * plus coarse pointer / no-hover for real devices.
+ */
 export function isMobileLayout(): boolean {
-  return window.matchMedia("(max-width: 768px), (pointer: coarse)").matches;
+  return window.matchMedia(
+    "(max-width: 1024px), (pointer: coarse), (hover: none)",
+  ).matches;
+}
+
+function isLandscape(): boolean {
+  return window.matchMedia("(orientation: landscape)").matches;
+}
+
+/** Keep a shell element's mobile/landscape classes in sync with the viewport. */
+export function bindShellLayout(
+  shell: HTMLElement,
+  onChange?: (mobile: boolean) => void,
+): () => void {
+  const sync = () => {
+    const mobile = isMobileLayout();
+    shell.classList.toggle("shell-mobile", mobile);
+    shell.classList.toggle("shell-landscape", mobile && isLandscape());
+    document.documentElement.classList.toggle("gbc-mobile", mobile);
+    onChange?.(mobile);
+  };
+  sync();
+  const mqWidth = window.matchMedia("(max-width: 1024px)");
+  const mqCoarse = window.matchMedia("(pointer: coarse)");
+  const mqHover = window.matchMedia("(hover: none)");
+  const mqOrient = window.matchMedia("(orientation: landscape)");
+  mqWidth.addEventListener("change", sync);
+  mqCoarse.addEventListener("change", sync);
+  mqHover.addEventListener("change", sync);
+  mqOrient.addEventListener("change", sync);
+  window.addEventListener("resize", sync);
+  return () => {
+    mqWidth.removeEventListener("change", sync);
+    mqCoarse.removeEventListener("change", sync);
+    mqHover.removeEventListener("change", sync);
+    mqOrient.removeEventListener("change", sync);
+    window.removeEventListener("resize", sync);
+  };
 }
 
 const MAX_FRAME_DT_MS = 50;

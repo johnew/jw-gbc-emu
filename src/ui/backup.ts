@@ -1,7 +1,7 @@
 import type { Emulator } from "../core/emulator";
 import { base64ToUint8, uint8ToBase64 } from "../core/encoding";
 import { buildBackupBundle, parseBackupBundle, saveSavestate } from "../core/saves";
-import type { EmulatorSavestate, SaveState } from "../core/types";
+import type { CartridgeHeader, EmulatorSavestate, SaveState } from "../core/types";
 import { downloadBlob, downloadJson, safeFilename } from "./download";
 
 /** Minimal session surface needed for export / import. */
@@ -14,13 +14,26 @@ export interface BackupHost {
   onSavestateApplied(): void;
 }
 
+function requireHeader(host: BackupHost): CartridgeHeader | null {
+  const header = host.emu.getHeader();
+  if (!header) {
+    host.reportStatus("Load a ROM first");
+    return null;
+  }
+  return header;
+}
+
+function gameBaseName(host: BackupHost, header?: CartridgeHeader | null): string {
+  return safeFilename(header?.title || host.emu.title || "game");
+}
+
 export function downloadBatterySav(host: BackupHost): void {
   const bytes = host.emu.exportBatterySavBytes();
   if (!bytes) {
     host.reportStatus("No battery save to download");
     return;
   }
-  const name = safeFilename(host.emu.title || "game");
+  const name = gameBaseName(host);
   downloadBlob(
     `${name}.sav`,
     new Blob([new Uint8Array(bytes)], { type: "application/octet-stream" }),
@@ -34,7 +47,7 @@ export function downloadBatteryJson(host: BackupHost): void {
     host.reportStatus("No battery save to download");
     return;
   }
-  const name = safeFilename(host.emu.title || "game");
+  const name = gameBaseName(host);
   downloadJson(`${name}.battery.json`, {
     version: 1,
     kind: "gbc-battery",
@@ -47,43 +60,34 @@ export function downloadBatteryJson(host: BackupHost): void {
 }
 
 export function downloadLiveSavestate(host: BackupHost): void {
-  const header = host.emu.getHeader();
-  if (!header) {
-    host.reportStatus("Load a ROM first");
-    return;
-  }
+  const header = requireHeader(host);
+  if (!header) return;
   const slot = host.getSelectedSlot();
-  const name = safeFilename(header.title);
+  const name = gameBaseName(host, header);
   downloadJson(`${name}.slot${slot}.gbcstate.json`, host.emu.createSavestate());
   host.reportStatus(`Downloaded live savestate as slot ${slot} file`);
 }
 
 export function downloadStoredSavestate(host: BackupHost): void {
-  const header = host.emu.getHeader();
-  if (!header) {
-    host.reportStatus("Load a ROM first");
-    return;
-  }
+  const header = requireHeader(host);
+  if (!header) return;
   const slot = host.getSelectedSlot();
   const state = host.emu.getSavestateFromSlot(slot);
   if (!state) {
     host.reportStatus(`No stored savestate in slot ${slot}`);
     return;
   }
-  const name = safeFilename(header.title);
+  const name = gameBaseName(host, header);
   downloadJson(`${name}.slot${slot}.gbcstate.json`, state);
   host.reportStatus(`Downloaded slot ${slot} savestate`);
 }
 
 export function downloadFullBackup(host: BackupHost): void {
-  const header = host.emu.getHeader();
-  if (!header) {
-    host.reportStatus("Load a ROM first");
-    return;
-  }
+  const header = requireHeader(host);
+  if (!header) return;
   host.emu.flushSave();
   const bundle = buildBackupBundle(header, host.emu.exportBatterySave());
-  const name = safeFilename(header.title);
+  const name = gameBaseName(host, header);
   downloadJson(`${name}.gbcbackup.json`, bundle);
   host.reportStatus(`Downloaded full backup (${Object.keys(bundle.savestates).length} states)`);
 }

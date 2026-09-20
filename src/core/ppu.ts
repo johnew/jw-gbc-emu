@@ -1,14 +1,12 @@
-import { IF_LCD, IF_VBLANK, SCREEN_HEIGHT, SCREEN_WIDTH } from "./types";
+import {
+  DMG_PALETTE_COLORS,
+  IF_LCD,
+  IF_VBLANK,
+  SCREEN_HEIGHT,
+  SCREEN_WIDTH,
+} from "./types";
 import type { DmgPaletteId } from "./types";
 import { base64ToUint8, uint8ToBase64 } from "./encoding";
-
-/** RGBA little-endian for ImageData */
-const DMG_PALETTES: Record<DmgPaletteId, readonly [number, number, number, number]> = {
-  green: [0xff0fbc9b, 0xff0fac8b, 0xff306230, 0xff0f380f],
-  gray: [0xffffffff, 0xffaaaaaa, 0xff555555, 0xff000000],
-  pocket: [0xff6fbfa4, 0xff4f8f74, 0xff2f5f44, 0xff0f2f14],
-  brown: [0xff8cbcf8, 0xff548ce0, 0xff304890, 0xff101820],
-};
 
 export class Ppu {
   lcdc = 0x91;
@@ -41,7 +39,7 @@ export class Ppu {
   private modeClock = 0;
   private windowLine = 0;
   private cgbMode = false;
-  private dmgColors: [number, number, number, number] = [...DMG_PALETTES.green];
+  private dmgColors: [number, number, number, number] = [...DMG_PALETTE_COLORS.green];
   private dmgPaletteId: DmgPaletteId = "green";
   private requestInterrupt: ((bit: number) => void) | null = null;
   private onHBlank: (() => void) | null = null;
@@ -59,9 +57,9 @@ export class Ppu {
   }
 
   setDmgPalette(id: DmgPaletteId): void {
-    if (!(id in DMG_PALETTES)) id = "green";
+    if (!(id in DMG_PALETTE_COLORS)) id = "green";
     this.dmgPaletteId = id;
-    this.dmgColors = [...DMG_PALETTES[id]];
+    this.dmgColors = [...DMG_PALETTE_COLORS[id]];
   }
 
   setCgbMode(enabled: boolean): void {

@@ -7,15 +7,7 @@ import {
   downloadStoredSavestate,
   importSaveFile,
 } from "./backup";
-
-function runAction(status: HTMLElement, action: () => void, okMessage: string): void {
-  try {
-    action();
-    status.textContent = okMessage;
-  } catch (err) {
-    status.textContent = err instanceof Error ? err.message : String(err);
-  }
-}
+import { errorText } from "./util";
 
 export function openOptionsModal(host: BackupHost): void {
   document.querySelector(".options-overlay")?.remove();
@@ -58,20 +50,38 @@ export function openOptionsModal(host: BackupHost): void {
   const status = overlay.querySelector<HTMLElement>("[data-opt-status]")!;
   const close = () => overlay.remove();
 
+  // Mirror session status messages into the modal
+  const modalHost: BackupHost = {
+    emu: host.emu,
+    getSelectedSlot: () => host.getSelectedSlot(),
+    refreshSlotHints: () => host.refreshSlotHints(),
+    onSavestateApplied: () => host.onSavestateApplied(),
+    reportStatus(text: string) {
+      host.reportStatus(text);
+      status.textContent = text;
+    },
+  };
+
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) close();
   });
   overlay.querySelector(".options-close")!.addEventListener("click", close);
 
-  const actions: Array<[string, () => void, string]> = [
-    ["[data-dl-sav]", () => downloadBatterySav(host), "Battery .sav download started"],
-    ["[data-dl-battery-json]", () => downloadBatteryJson(host), "Battery JSON download started"],
-    ["[data-dl-live-state]", () => downloadLiveSavestate(host), "Savestate download started"],
-    ["[data-dl-slot-state]", () => downloadStoredSavestate(host), "Stored slot download attempted"],
-    ["[data-dl-backup]", () => downloadFullBackup(host), "Full backup download started"],
+  const actions: Array<[string, () => void]> = [
+    ["[data-dl-sav]", () => downloadBatterySav(modalHost)],
+    ["[data-dl-battery-json]", () => downloadBatteryJson(modalHost)],
+    ["[data-dl-live-state]", () => downloadLiveSavestate(modalHost)],
+    ["[data-dl-slot-state]", () => downloadStoredSavestate(modalHost)],
+    ["[data-dl-backup]", () => downloadFullBackup(modalHost)],
   ];
-  for (const [sel, action, msg] of actions) {
-    overlay.querySelector(sel)!.addEventListener("click", () => runAction(status, action, msg));
+  for (const [sel, action] of actions) {
+    overlay.querySelector(sel)!.addEventListener("click", () => {
+      try {
+        action();
+      } catch (err) {
+        status.textContent = errorText(err);
+      }
+    });
   }
 
   overlay.querySelector<HTMLInputElement>("[data-import]")!.addEventListener("change", async (e) => {
@@ -79,10 +89,10 @@ export function openOptionsModal(host: BackupHost): void {
     const file = input.files?.[0];
     if (!file) return;
     try {
-      await importSaveFile(host, file);
-      status.textContent = `Imported ${file.name}`;
+      await importSaveFile(modalHost, file);
+      if (!status.textContent) status.textContent = `Imported ${file.name}`;
     } catch (err) {
-      status.textContent = err instanceof Error ? err.message : String(err);
+      status.textContent = errorText(err);
     }
     input.value = "";
   });

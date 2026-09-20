@@ -2,6 +2,7 @@ import { Emulator } from "../core/emulator";
 import {
   DMG_PALETTE_IDS,
   DMG_PALETTE_LABELS,
+  dmgLightColor,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
   type Button,
@@ -9,7 +10,9 @@ import {
 } from "../core/types";
 import { AudioOutput } from "../audio/output";
 import { isMobileLayout, takeFrameBudget } from "./layout";
+import type { LinkUiState } from "./linkUi";
 import { openOptionsModal } from "./options";
+import { errorText } from "./util";
 
 const KEY_MAP: Record<string, Button> = {
   ArrowRight: "right",
@@ -31,7 +34,11 @@ const KEY_MAP: Record<string, Button> = {
 
 export interface SessionCallbacks {
   onFocus: (session: EmulatorSession) => void;
-  onStatus: (session: EmulatorSession, text: string) => void;
+  /** ROM title / CGB flag changed — refresh tab labels. */
+  onRomMetaChanged: (session: EmulatorSession) => void;
+  onAddGame?: () => void;
+  onRemoveGame?: () => void;
+  onToggleLink?: () => void;
 }
 
 let nextSessionId = 1;
@@ -55,6 +62,12 @@ export class EmulatorSession {
   private slotSelect: HTMLSelectElement;
   private slotHint: HTMLElement;
   private titleEl: HTMLElement;
+  private mobileTitleEl: HTMLElement;
+  private settingsSheet: HTMLElement;
+  private mpAddBtn: HTMLButtonElement;
+  private mpRemoveBtn: HTMLButtonElement;
+  private mpLinkBtn: HTMLButtonElement;
+  private mpLinkStatus: HTMLElement;
 
   private romLoaded = false;
   private frameAcc = 0;
@@ -83,6 +96,7 @@ export class EmulatorSession {
         <span class="session-focus-tag">Click to control</span>
       </div>
       <div class="play-deck">
+        <p class="mobile-title" data-mobile-title>${label}</p>
         <div class="touch-dpad" role="group" aria-label="D-pad">
           <button type="button" class="touch-btn touch-up" data-btn="up" aria-label="Up">▲</button>
           <button type="button" class="touch-btn touch-left" data-btn="left" aria-label="Left">◀</button>
@@ -101,42 +115,58 @@ export class EmulatorSession {
           <button type="button" class="touch-btn touch-select" data-btn="select" aria-label="Select">Select</button>
           <button type="button" class="touch-btn touch-start" data-btn="start" aria-label="Start">Start</button>
         </div>
+        <button type="button" class="settings-fab" data-settings-open aria-label="Open settings">⚙</button>
       </div>
-      <div class="controls-panel">
-        <div class="action-bar" role="toolbar" aria-label="Emulator actions">
-          <label class="file-btn">
-            Open ROM
-            <input type="file" accept=".gb,.gbc,.bin" hidden data-rom />
-          </label>
-          <button type="button" data-speed>Speed 1x</button>
-          <button type="button" data-mute>Mute</button>
-          <button type="button" data-save-state>Save</button>
-          <button type="button" data-load-state>Load</button>
-          <button type="button" data-options>Options</button>
-          <button type="button" class="desktop-only" data-fullscreen>Fullscreen</button>
-        </div>
-        <div class="settings-row">
-          <label class="scale-label">
-            Shades
-            <select data-palette>${paletteOptions}</select>
-          </label>
-          <label class="scale-label desktop-only">
-            Scale
-            <select data-scale>
-              <option value="2">2×</option>
-              <option value="3" selected>3×</option>
-              <option value="4">4×</option>
-              <option value="fit">Fit</option>
-            </select>
-          </label>
-          <label class="scale-label">
-            Slot
-            <select data-slot>${slotOptions}</select>
-          </label>
-          <span class="slot-hint" data-slot-hint></span>
+      <div class="settings-sheet" data-settings-sheet hidden>
+        <button type="button" class="settings-backdrop" data-settings-close aria-label="Close settings"></button>
+        <div class="settings-sheet-panel" role="dialog" aria-label="Settings">
+          <header class="settings-sheet-head">
+            <h2>Settings</h2>
+            <button type="button" class="settings-sheet-close" data-settings-close aria-label="Close">×</button>
+          </header>
+          <div class="controls-panel">
+            <div class="action-bar" role="toolbar" aria-label="Emulator actions">
+              <label class="file-btn">
+                Open ROM
+                <input type="file" accept=".gb,.gbc,.bin" hidden data-rom />
+              </label>
+              <button type="button" data-speed>Speed 1x</button>
+              <button type="button" data-mute>Mute</button>
+              <button type="button" data-save-state>Save</button>
+              <button type="button" data-load-state>Load</button>
+              <button type="button" data-options>Options</button>
+              <button type="button" class="desktop-only" data-fullscreen>Fullscreen</button>
+            </div>
+            <div class="settings-row">
+              <label class="setting-label">
+                Shades
+                <select data-palette>${paletteOptions}</select>
+              </label>
+              <label class="setting-label setting-desktop">
+                Scale
+                <select data-scale>
+                  <option value="2">2×</option>
+                  <option value="3" selected>3×</option>
+                  <option value="4">4×</option>
+                  <option value="fit">Fit</option>
+                </select>
+              </label>
+              <label class="setting-label">
+                Slot
+                <select data-slot>${slotOptions}</select>
+              </label>
+              <span class="slot-hint" data-slot-hint></span>
+            </div>
+            <div class="mobile-global-actions">
+              <button type="button" data-add-game>Add second game</button>
+              <button type="button" data-remove-game hidden>Close second game</button>
+              <button type="button" data-toggle-link hidden>Connect link cable</button>
+              <span class="link-status" data-session-link-status hidden></span>
+            </div>
+            <p class="status" data-status>No ROM loaded</p>
+          </div>
         </div>
       </div>
-      <p class="status" data-status>No ROM loaded</p>
     `;
     host.appendChild(this.root);
 
@@ -153,15 +183,24 @@ export class EmulatorSession {
     this.slotSelect = this.root.querySelector("[data-slot]")!;
     this.slotHint = this.root.querySelector("[data-slot-hint]")!;
     this.titleEl = this.root.querySelector(".session-title")!;
+    this.mobileTitleEl = this.root.querySelector("[data-mobile-title]")!;
+    this.settingsSheet = this.root.querySelector("[data-settings-sheet]")!;
+    this.mpAddBtn = this.root.querySelector("[data-add-game]")!;
+    this.mpRemoveBtn = this.root.querySelector("[data-remove-game]")!;
+    this.mpLinkBtn = this.root.querySelector("[data-toggle-link]")!;
+    this.mpLinkStatus = this.root.querySelector("[data-session-link-status]")!;
 
     this.bindUi();
     this.bindTouchPad();
+    this.bindSettingsSheet();
     if (isMobileLayout()) {
       this.scaleSelect.value = "fit";
+    } else {
+      // Desktop: settings sheet is the normal always-visible controls panel
+      this.settingsSheet.hidden = false;
     }
     this.applyScale();
     this.applyPalette("green");
-    this.paint();
   }
 
   get hasRom(): boolean {
@@ -202,6 +241,22 @@ export class EmulatorSession {
     this.frameAcc = 0;
   }
 
+  /**
+   * Re-apply canvas sizing after mobile/desktop or tab switches.
+   * The first session can keep stale inline sizes if it was created before
+   * the shell entered mobile mode.
+   */
+  refreshDisplayLayout(onMobile = isMobileLayout()): void {
+    if (onMobile) {
+      this.scaleSelect.value = "fit";
+      if (this.settingsSheet.dataset.userOpen !== "1") this.settingsSheet.hidden = true;
+    } else {
+      this.settingsSheet.hidden = false;
+    }
+    this.applyScale();
+    this.paint();
+  }
+
   private advanceOneFrame(): void {
     this.emu.runFrame();
     const samples = this.emu.takeAudioSamples();
@@ -233,7 +288,7 @@ export class EmulatorSession {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") {
         this.slotSelect.value = e.code.slice(-1);
-        this.refreshSlotHint();
+        this.refreshSlotHints();
         return true;
       }
     }
@@ -247,8 +302,9 @@ export class EmulatorSession {
     }
     if (e.code === "KeyP") {
       e.preventDefault();
+      if (this.emu.isCgb) return true;
       const next = this.emu.cycleDmgPalette();
-      this.paletteSelect.value = next;
+      this.applyPalette(next);
       return true;
     }
     if (e.code === "KeyF") {
@@ -286,27 +342,40 @@ export class EmulatorSession {
     this.emu.flushSave();
   }
 
-  openOptions(): void {
-    openOptionsModal(this);
-  }
-
   getSelectedSlot(): number {
     return Number(this.slotSelect.value) || 1;
   }
 
+  /** BackupHost */
   reportStatus(text: string): void {
     this.setStatus(text);
   }
 
+  /** BackupHost */
   refreshSlotHints(): void {
-    this.refreshSlotHint();
+    if (!this.romLoaded) {
+      this.slotHint.textContent = "";
+      return;
+    }
+    const occupied = this.emu.occupiedSlots();
+    const cur = this.getSelectedSlot();
+    const mark = occupied.includes(cur) ? "filled" : "empty";
+    this.slotHint.textContent =
+      occupied.length === 0
+        ? `Slot ${cur} empty`
+        : `Slot ${cur} ${mark} · used: ${occupied.join(", ")}`;
   }
 
   onSavestateApplied(): void {
     this.frameAcc = 0;
     this.paint();
     this.paletteSelect.value = this.emu.getDmgPalette();
-    this.refreshSlotHint();
+    this.refreshSlotHints();
+  }
+
+  private setDisplayTitle(name: string): void {
+    this.titleEl.textContent = name;
+    this.mobileTitleEl.textContent = name;
   }
 
   private bindUi(): void {
@@ -323,9 +392,12 @@ export class EmulatorSession {
       this.romLoaded = true;
       this.lastTs = performance.now();
       this.frameAcc = 0;
-      this.refreshSlotHint();
-      this.titleEl.textContent = this.emu.title || "Game";
+      this.refreshSlotHints();
+      this.setDisplayTitle(this.emu.title || "Game");
+      this.syncShadeAvailability();
+      this.refreshDisplayLayout();
       this.setStatus(`${this.emu.title}${this.emu.isCgb ? " (CGB)" : " (DMG)"} — playing`);
+      this.cb.onRomMetaChanged(this);
       focus();
     });
 
@@ -357,15 +429,72 @@ export class EmulatorSession {
       focus();
     });
     this.root.querySelector("[data-options]")!.addEventListener("click", () => {
-      this.openOptions();
+      openOptionsModal(this);
       focus();
     });
 
-    this.slotSelect.addEventListener("change", () => this.refreshSlotHint());
+    this.slotSelect.addEventListener("change", () => this.refreshSlotHints());
     this.paletteSelect.addEventListener("change", () => {
       this.applyPalette(this.paletteSelect.value as DmgPaletteId);
     });
     this.scaleSelect.addEventListener("change", () => this.applyScale());
+  }
+
+  private syncShadeAvailability(): void {
+    const cgb = this.emu.isCgb;
+    this.paletteSelect.disabled = cgb;
+    const label = this.paletteSelect.closest(".setting-label");
+    if (label instanceof HTMLElement) {
+      label.title = cgb
+        ? "Shades apply to Game Boy (DMG) games only — this ROM is Game Boy Color"
+        : "DMG LCD shade preset";
+    }
+  }
+
+  private openSettingsSheet(): void {
+    this.settingsSheet.hidden = false;
+    this.settingsSheet.dataset.userOpen = "1";
+    this.paletteSelect.value = this.emu.getDmgPalette();
+    this.syncShadeAvailability();
+    this.cb.onFocus(this);
+  }
+
+  closeSettingsSheet(): void {
+    this.settingsSheet.hidden = true;
+    delete this.settingsSheet.dataset.userOpen;
+  }
+
+  private bindSettingsSheet(): void {
+    this.root.querySelector("[data-settings-open]")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.openSettingsSheet();
+    });
+    this.root.querySelectorAll("[data-settings-close]").forEach((el) => {
+      el.addEventListener("click", () => this.closeSettingsSheet());
+    });
+
+    this.mpAddBtn.addEventListener("click", () => {
+      this.cb.onAddGame?.();
+      this.closeSettingsSheet();
+    });
+    this.mpRemoveBtn.addEventListener("click", () => {
+      this.cb.onRemoveGame?.();
+      this.closeSettingsSheet();
+    });
+    this.mpLinkBtn.addEventListener("click", () => {
+      this.cb.onToggleLink?.();
+    });
+  }
+
+  /** Keep mobile settings sheet dual-game / link controls in sync with the app. */
+  syncMultiplayerUi(state: LinkUiState): void {
+    this.mpAddBtn.hidden = state.dual;
+    this.mpRemoveBtn.hidden = !state.dual;
+    this.mpLinkBtn.hidden = !state.dual;
+    this.mpLinkStatus.hidden = !state.dual;
+    this.mpLinkBtn.textContent = state.linkLabel;
+    this.mpLinkStatus.textContent = state.linkHint;
+    this.mpLinkStatus.classList.toggle("on", state.linked);
   }
 
   private bindTouchPad(): void {
@@ -424,29 +553,15 @@ export class EmulatorSession {
     });
   }
 
-  private refreshSlotHint(): void {
-    if (!this.romLoaded) {
-      this.slotHint.textContent = "";
-      return;
-    }
-    const occupied = this.emu.occupiedSlots();
-    const cur = this.getSelectedSlot();
-    const mark = occupied.includes(cur) ? "filled" : "empty";
-    this.slotHint.textContent =
-      occupied.length === 0
-        ? `Slot ${cur} empty`
-        : `Slot ${cur} ${mark} · used: ${occupied.join(", ")}`;
-  }
-
   private applyScale(): void {
     const mode = this.scaleSelect.value;
-    this.stage.classList.toggle("fit", mode === "fit");
-    if (mode === "fit") {
-      this.canvas.style.width = "";
-      this.canvas.style.height = "";
+    const fit = mode === "fit" || isMobileLayout();
+    this.stage.classList.toggle("fit", fit);
+    if (fit) {
+      this.canvas.style.removeProperty("width");
+      this.canvas.style.removeProperty("height");
     } else {
       const n = Number(mode);
-      // Cap to session width (not viewport) so mobile chrome resize doesn't thrash size
       const hostW = this.root.clientWidth || window.innerWidth;
       const maxW = Math.min(hostW - 24, SCREEN_WIDTH * n);
       const scale = maxW / SCREEN_WIDTH;
@@ -463,12 +578,24 @@ export class EmulatorSession {
 
   private setStatus(text: string): void {
     this.statusEl.textContent = text;
-    this.cb.onStatus(this, text);
   }
 
   private applyPalette(id: DmgPaletteId): void {
     this.emu.setDmgPalette(id);
     this.paletteSelect.value = id;
+    if (this.romLoaded) {
+      // Framebuffer stores resolved RGBA — advance one frame so the new
+      // shades show immediately (skip when linked to avoid lockstep desync).
+      if (!this.emu.isLinked()) this.advanceOneFrame();
+    } else {
+      this.paintIdlePreview();
+    }
+  }
+
+  /** Fill the canvas with the current DMG light shade so Shades is visible pre-ROM. */
+  private paintIdlePreview(): void {
+    this.pixels.fill(dmgLightColor(this.emu.getDmgPalette()));
+    this.ctx.putImageData(this.imageData, 0, 0);
   }
 
   private toggleMute(): void {
@@ -510,10 +637,10 @@ export class EmulatorSession {
     try {
       const slot = this.getSelectedSlot();
       this.emu.saveStateToSlot(slot);
-      this.refreshSlotHint();
+      this.refreshSlotHints();
       this.setStatus(`Saved state to slot ${slot}`);
     } catch (err) {
-      this.setStatus(`Save state failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(`Save state failed: ${errorText(err)}`);
     }
   }
 
@@ -532,7 +659,7 @@ export class EmulatorSession {
       this.onSavestateApplied();
       this.setStatus(`Loaded state from slot ${slot}`);
     } catch (err) {
-      this.setStatus(`Load state failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(`Load state failed: ${errorText(err)}`);
     }
   }
 }

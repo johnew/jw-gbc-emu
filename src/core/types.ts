@@ -16,6 +16,21 @@ export const DMG_PALETTE_LABELS: Record<DmgPaletteId, string> = {
   brown: "Brown",
 };
 
+/** RGBA little-endian for ImageData / canvas preview. */
+export const DMG_PALETTE_COLORS: Record<
+  DmgPaletteId,
+  readonly [number, number, number, number]
+> = {
+  green: [0xff0fbc9b, 0xff0fac8b, 0xff306230, 0xff0f380f],
+  gray: [0xffffffff, 0xffaaaaaa, 0xff555555, 0xff000000],
+  pocket: [0xff6fbfa4, 0xff4f8f74, 0xff2f5f44, 0xff0f2f14],
+  brown: [0xff8cbcf8, 0xff548ce0, 0xff304890, 0xff101820],
+};
+
+export function dmgLightColor(id: DmgPaletteId): number {
+  return DMG_PALETTE_COLORS[id][0]!;
+}
+
 export const IF_VBLANK = 0x01;
 export const IF_LCD = 0x02;
 export const IF_TIMER = 0x04;

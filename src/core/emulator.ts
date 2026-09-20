@@ -8,7 +8,7 @@ import { LinkCable } from "./serial";
 import { Timer } from "./timer";
 import type { Button, DmgPaletteId, EmulatorSavestate, SaveState } from "./types";
 import { CYCLES_PER_FRAME, DMG_PALETTE_IDS, IF_JOYPAD, IF_TIMER } from "./types";
-import { hasSavestate, loadSave, loadSavestate, listSavestateSlots, saveSave, saveSavestate } from "./saves";
+import { loadSave, loadSavestate, listSavestateSlots, saveSave, saveSavestate } from "./saves";
 
 const AUTOSAVE_EVERY_FRAMES = 120;
 const SPEED_STEPS = [1, 2, 4, 6] as const;
@@ -49,10 +49,6 @@ export class Emulator {
 
   get isCgb(): boolean {
     return this.cart?.isCgb ?? false;
-  }
-
-  get isRunning(): boolean {
-    return this.running && this.cart !== null;
   }
 
   get frameBuffer(): Uint32Array {
@@ -209,11 +205,6 @@ export class Emulator {
     if (!state) return false;
     this.applySavestate(state);
     return true;
-  }
-
-  slotHasState(slot: number): boolean {
-    if (!this.cart) return false;
-    return hasSavestate(this.cart.header, slot);
   }
 
   occupiedSlots(): number[] {
