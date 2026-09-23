@@ -1,4 +1,5 @@
 import { Emulator } from "../core/emulator";
+import { AUTO_SAVE_SLOT } from "../core/saves";
 import {
   DMG_PALETTE_IDS,
   DMG_PALETTE_LABELS,
@@ -14,6 +15,11 @@ import type { LinkUiState } from "./linkUi";
 import { saveLastRom } from "./lastRom";
 import { openOptionsModal } from "./options";
 import { errorText } from "./util";
+
+const VOLUME_STORAGE_KEY = "gbc-volume";
+const CRT_STORAGE_KEY = "gbc-crt";
+const QUIET_CATCHUP_STORAGE_KEY = "gbc-quiet-catchup";
+const DEFAULT_VOLUME = 0.35;
 
 const KEY_MAP: Record<string, Button> = {
   ArrowRight: "right",
@@ -77,6 +83,8 @@ export class EmulatorSession {
   private lastTs = performance.now();
   private focused = false;
   private keepPitchAudio = false;
+  private quietCatchUp = false;
+  private crtFilter = false;
   private readonly cb: SessionCallbacks;
 
   constructor(host: HTMLElement, label: string, cb: SessionCallbacks) {
@@ -86,10 +94,14 @@ export class EmulatorSession {
     const paletteOptions = DMG_PALETTE_IDS.map(
       (id) => `<option value="${id}">${DMG_PALETTE_LABELS[id]}</option>`,
     ).join("");
-    const slotOptions = Array.from({ length: 9 }, (_, i) => {
-      const n = i + 1;
-      return `<option value="${n}">Slot ${n}</option>`;
-    }).join("");
+    const slotOptions = [
+      `<option value="${AUTO_SAVE_SLOT}">Auto</option>`,
+      ...Array.from({ length: 9 }, (_, i) => {
+        const n = i + 1;
+        const sel = n === 1 ? " selected" : "";
+        return `<option value="${n}"${sel}>Slot ${n}</option>`;
+      }),
+    ].join("");
 
     this.root = document.createElement("section");
     this.root.className = "session";
@@ -161,6 +173,16 @@ export class EmulatorSession {
               </label>
               <span class="slot-hint" data-slot-hint></span>
             </div>
+            <div class="settings-row settings-row-audio">
+              <label class="setting-label setting-volume">
+                Volume
+                <input type="range" data-volume min="0" max="100" step="1" value="35" />
+              </label>
+              <label class="experimental-check">
+                <input type="checkbox" data-crt />
+                CRT filter
+              </label>
+            </div>
             <details class="experimental-panel">
               <summary>Experimental <span class="alpha-tag">alpha</span></summary>
               <label class="experimental-check">
@@ -168,6 +190,11 @@ export class EmulatorSession {
                 Normal-pitch turbo
               </label>
               <p class="experimental-hint">Hack to avoid chipmunk music at 2×/4×. Plays at normal speed (sound lags the game), then soft-catches up about once a minute. Best at 2×.</p>
+              <label class="experimental-check">
+                <input type="checkbox" data-quiet-catchup />
+                Quiet-window catch-up
+              </label>
+              <p class="experimental-hint">With normal-pitch turbo, also resync when the music goes quiet for a moment (less mid-song jumping). Minute timer still applies as a fallback.</p>
             </details>
             <div class="mobile-global-actions">
               <button type="button" data-add-game>Add second game</button>
@@ -224,6 +251,11 @@ export class EmulatorSession {
     this.root.classList.toggle("focused", focused);
   }
 
+  /** Mute audio while another mobile tab is active (does not change user Mute). */
+  setInactiveAudioMuted(muted: boolean): void {
+    this.audio.setFocusMuted(muted);
+  }
+
   destroy(): void {
     this.emu.unload();
     void this.audio.close();
@@ -253,8 +285,16 @@ export class EmulatorSession {
     this.frameAcc = 0;
   }
 
-  /** Tab hidden — stop audio and avoid catch-up bursts on return. */
+  /** Tab hidden — auto-save state, stop audio, avoid catch-up bursts on return. */
   pauseForBackground(): void {
+    if (this.romLoaded) {
+      try {
+        this.emu.saveStateToSlot(AUTO_SAVE_SLOT);
+        this.refreshSlotHints();
+      } catch (err) {
+        console.warn("Auto-save state failed:", err);
+      }
+    }
     void this.audio.suspend();
     this.frameAcc = 0;
     this.flushSave();
@@ -378,7 +418,8 @@ export class EmulatorSession {
   }
 
   getSelectedSlot(): number {
-    return Number(this.slotSelect.value) || 1;
+    const n = Number(this.slotSelect.value);
+    return Number.isFinite(n) ? n : 1;
   }
 
   /** BackupHost */
@@ -394,11 +435,15 @@ export class EmulatorSession {
     }
     const occupied = this.emu.occupiedSlots();
     const cur = this.getSelectedSlot();
+    const label = cur === AUTO_SAVE_SLOT ? "Auto" : `Slot ${cur}`;
     const mark = occupied.includes(cur) ? "filled" : "empty";
+    const used = occupied
+      .map((s) => (s === AUTO_SAVE_SLOT ? "Auto" : String(s)))
+      .join(", ");
     this.slotHint.textContent =
       occupied.length === 0
-        ? `Slot ${cur} empty`
-        : `Slot ${cur} ${mark} · used: ${occupied.join(", ")}`;
+        ? `${label} empty`
+        : `${label} ${mark} · used: ${used}`;
   }
 
   onSavestateApplied(): void {
@@ -487,12 +532,54 @@ export class EmulatorSession {
     });
     this.scaleSelect.addEventListener("change", () => this.applyScale());
 
+    const volumeInput = this.root.querySelector<HTMLInputElement>("[data-volume]")!;
+    const initialVolume = readStoredNumber(VOLUME_STORAGE_KEY, DEFAULT_VOLUME);
+    volumeInput.value = String(Math.round(initialVolume * 100));
+    this.audio.setVolume(initialVolume);
+    volumeInput.addEventListener("input", () => {
+      const v = Number(volumeInput.value) / 100;
+      this.audio.setVolume(v);
+      try {
+        localStorage.setItem(VOLUME_STORAGE_KEY, String(v));
+      } catch {
+        /* private mode */
+      }
+    });
+
+    const crt = this.root.querySelector<HTMLInputElement>("[data-crt]")!;
+    this.crtFilter = readStoredFlag(CRT_STORAGE_KEY, false);
+    crt.checked = this.crtFilter;
+    this.applyCrtFilter();
+    crt.addEventListener("change", () => {
+      this.crtFilter = crt.checked;
+      this.applyCrtFilter();
+      try {
+        localStorage.setItem(CRT_STORAGE_KEY, crt.checked ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+    });
+
     const keepPitch = this.root.querySelector<HTMLInputElement>("[data-keep-pitch]")!;
     keepPitch.checked = false;
     this.keepPitchAudio = false;
     keepPitch.addEventListener("change", () => {
       this.keepPitchAudio = keepPitch.checked;
       this.audio.resetKeepPitchQueue();
+    });
+
+    const quietCatchUp = this.root.querySelector<HTMLInputElement>("[data-quiet-catchup]")!;
+    this.quietCatchUp = readStoredFlag(QUIET_CATCHUP_STORAGE_KEY, false);
+    quietCatchUp.checked = this.quietCatchUp;
+    this.audio.setQuietCatchUp(this.quietCatchUp);
+    quietCatchUp.addEventListener("change", () => {
+      this.quietCatchUp = quietCatchUp.checked;
+      this.audio.setQuietCatchUp(this.quietCatchUp);
+      try {
+        localStorage.setItem(QUIET_CATCHUP_STORAGE_KEY, quietCatchUp.checked ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
     });
   }
 
@@ -626,6 +713,10 @@ export class EmulatorSession {
     }
   }
 
+  private applyCrtFilter(): void {
+    this.stage.classList.toggle("crt", this.crtFilter);
+  }
+
   private paint(): void {
     const fb = this.emu.frameBuffer;
     for (let i = 0; i < fb.length; i++) this.pixels[i] = fb[i]!;
@@ -694,7 +785,7 @@ export class EmulatorSession {
       const slot = this.getSelectedSlot();
       this.emu.saveStateToSlot(slot);
       this.refreshSlotHints();
-      this.setStatus(`Saved state to slot ${slot}`);
+      this.setStatus(`Saved state to ${slot === AUTO_SAVE_SLOT ? "Auto" : `slot ${slot}`}`);
     } catch (err) {
       this.setStatus(`Save state failed: ${errorText(err)}`);
     }
@@ -709,13 +800,34 @@ export class EmulatorSession {
       const slot = this.getSelectedSlot();
       const ok = this.emu.loadStateFromSlot(slot);
       if (!ok) {
-        this.setStatus(`No savestate in slot ${slot}`);
+        this.setStatus(`No savestate in ${slot === AUTO_SAVE_SLOT ? "Auto" : `slot ${slot}`}`);
         return;
       }
       this.onSavestateApplied();
-      this.setStatus(`Loaded state from slot ${slot}`);
+      this.setStatus(`Loaded state from ${slot === AUTO_SAVE_SLOT ? "Auto" : `slot ${slot}`}`);
     } catch (err) {
       this.setStatus(`Load state failed: ${errorText(err)}`);
     }
+  }
+}
+
+function readStoredFlag(key: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return raw === "1" || raw === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback;
+  } catch {
+    return fallback;
   }
 }

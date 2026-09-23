@@ -34,7 +34,7 @@ export function mountApp(root: HTMLElement): void {
           <li><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> or <kbd>WASD</kbd> — D-pad</li>
           <li><kbd>Z</kbd> / <kbd>K</kbd> — A &nbsp; <kbd>X</kbd> / <kbd>J</kbd> — B</li>
           <li><kbd>Enter</kbd> — Start &nbsp; <kbd>Shift</kbd> — Select</li>
-          <li><kbd>F5</kbd> / <kbd>F7</kbd> — save / load state &nbsp; <kbd>1</kbd>–<kbd>9</kbd> — slot</li>
+          <li><kbd>F5</kbd> / <kbd>F7</kbd> — save / load state &nbsp; <kbd>1</kbd>–<kbd>9</kbd> — slot (Auto is separate)</li>
           <li><kbd>Tab</kbd> speed · <kbd>P</kbd> shades · <kbd>F</kbd> fullscreen (desktop) · <kbd>M</kbd> mute</li>
           <li><strong>Options</strong> — download / import battery saves and savestates</li>
           <li><strong>Link cable</strong> — connect both games to trade (works with mobile tabs)</li>
@@ -79,7 +79,11 @@ export function mountApp(root: HTMLElement): void {
 
   function setFocus(session: EmulatorSession): void {
     focused = session;
-    for (const s of sessions) s.setFocused(s === session);
+    const muteInactive = mobile() && isDual();
+    for (const s of sessions) {
+      s.setFocused(s === session);
+      s.setInactiveAudioMuted(muteInactive && s !== session);
+    }
     updateHint(session);
   }
 
@@ -160,6 +164,10 @@ export function mountApp(root: HTMLElement): void {
 
     for (const s of sessions) s.refreshDisplayLayout(onMobile);
     applyLinkUi(linkErrorHint);
+    if (focused) {
+      const muteInactive = onMobile && dual;
+      for (const s of sessions) s.setInactiveAudioMuted(muteInactive && s !== focused);
+    }
   }
 
   bindShellLayout(shell, (onMobile) => {

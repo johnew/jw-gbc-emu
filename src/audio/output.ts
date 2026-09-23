@@ -7,14 +7,15 @@ const APU_SAMPLE_RATE = 44100;
  * Normal turbo: playbackRate = emu speed (classic chipmunk).
  *
  * Keep-pitch (experimental hack): play queued PCM at 1× so turbo doesn't
- * pitch-shift the music. Lag is expected. About once a minute we soft-snap
- * to live audio so lag doesn't grow forever. Between catch-ups the stream
- * stays contiguous (no thinning — that made songs race).
+ * pitch-shift the music. Lag is expected. Soft-snaps to live on a timer,
+ * and optionally when the stream goes quiet (experimental quiet catch-up).
  */
 export class AudioOutput {
   private ctx: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private nextTime = 0;
-  private muted = false;
+  private userMuted = false;
+  private focusMuted = false;
   private volume = 0.35;
 
   /** Interleaved stereo chunks at APU rate (oldest chunk first). */
@@ -33,6 +34,9 @@ export class AudioOutput {
   private lastCatchUpWall = 0;
   private catchUpArmed = false;
   private catchUpAt = 0;
+  private quietCatchUp = false;
+  /** performance.now() when the inbound stream went quiet, or 0. */
+  private quietSince = 0;
 
   private turboSources: AudioBufferSourceNode[] = [];
 
@@ -44,6 +48,9 @@ export class AudioOutput {
   private static readonly PENDING_RESUME = Math.floor(APU_SAMPLE_RATE * 8) * 2;
   /** Wall-clock interval between snap-to-live catch-ups. */
   private static readonly CATCH_UP_EVERY_MS = 60_000;
+  private static readonly QUIET_RMS = 0.012;
+  private static readonly QUIET_HOLD_MS = 180;
+  private static readonly QUIET_MIN_LAG = Math.floor(APU_SAMPLE_RATE * 0.5) * 2;
   private static readonly FADE_OUT = 0.05;
   private static readonly FADE_IN = 0.06;
   private static readonly CHUNK_FRAMES = 2048;
@@ -51,6 +58,9 @@ export class AudioOutput {
   async resume(): Promise<void> {
     if (!this.ctx) {
       this.ctx = new AudioContext({ sampleRate: APU_SAMPLE_RATE });
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = this.volume;
+      this.masterGain.connect(this.ctx.destination);
       this.nextTime = this.ctx.currentTime + AudioOutput.MIN_LEAD;
       this.keepPitchNext = this.ctx.currentTime + AudioOutput.MIN_LEAD;
     }
@@ -59,6 +69,7 @@ export class AudioOutput {
 
   async suspend(): Promise<void> {
     this.catchUpArmed = false;
+    this.quietSince = 0;
     this.stopKeepPitch(true);
     this.stopTurboSources();
     this.clearPending();
@@ -66,7 +77,32 @@ export class AudioOutput {
   }
 
   setMuted(muted: boolean): void {
-    this.muted = muted;
+    this.userMuted = muted;
+  }
+
+  /** Silence when another game tab is focused (mobile dual-session). */
+  setFocusMuted(muted: boolean): void {
+    this.focusMuted = muted;
+  }
+
+  private get muted(): boolean {
+    return this.userMuted || this.focusMuted;
+  }
+
+  setVolume(volume: number): void {
+    this.volume = Math.min(1, Math.max(0, volume));
+    if (this.masterGain) {
+      this.masterGain.gain.value = this.volume;
+    }
+  }
+
+  getVolume(): number {
+    return this.volume;
+  }
+
+  setQuietCatchUp(enabled: boolean): void {
+    this.quietCatchUp = enabled;
+    if (!enabled) this.quietSince = 0;
   }
 
   resetKeepPitchQueue(): void {
@@ -74,6 +110,7 @@ export class AudioOutput {
     this.stopKeepPitch(false);
     this.resetCatchUpTimer();
     this.resetKeepGain();
+    this.quietSince = 0;
   }
 
   pushSamples(
@@ -85,7 +122,9 @@ export class AudioOutput {
 
     if (keepPitch) {
       this.enterKeepPitch();
-      this.maybeArmCatchUp();
+      this.trackQuiet(interleaved);
+      this.maybeArmQuietCatchUp();
+      this.maybeArmTimedCatchUp();
       this.finishCatchUpIfDue();
       this.enqueueKeepPitch(interleaved);
       this.flushKeepPitch();
@@ -96,15 +135,27 @@ export class AudioOutput {
     this.scheduleTurbo(interleaved, Math.max(1, playbackSpeed));
   }
 
+  private ensureMaster(): GainNode {
+    if (!this.ctx) throw new Error("AudioContext missing");
+    if (!this.masterGain) {
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = this.volume;
+      this.masterGain.connect(this.ctx.destination);
+    }
+    return this.masterGain;
+  }
+
   private enterKeepPitch(): void {
     if (!this.ctx || this.keepPitchActive) return;
     this.stopTurboSources();
     this.clearPending();
     this.resetCatchUpTimer();
+    this.quietSince = 0;
+    const master = this.ensureMaster();
     if (!this.keepPitchGain) {
       this.keepPitchGain = this.ctx.createGain();
       this.keepPitchGain.gain.value = 1;
-      this.keepPitchGain.connect(this.ctx.destination);
+      this.keepPitchGain.connect(master);
     }
     this.keepPitchNext = this.ctx.currentTime + AudioOutput.MIN_LEAD;
     this.keepPitchActive = true;
@@ -114,6 +165,7 @@ export class AudioOutput {
     if (!this.keepPitchActive) return;
     this.keepPitchActive = false;
     this.catchUpArmed = false;
+    this.quietSince = 0;
     this.clearPending();
     this.stopKeepPitch(true);
     if (this.ctx) this.nextTime = this.ctx.currentTime + AudioOutput.MIN_LEAD;
@@ -133,16 +185,41 @@ export class AudioOutput {
     g.setValueAtTime(1, now);
   }
 
-  /** Once a minute, fade out and drop the lag queue so audio resyncs to the game. */
-  private maybeArmCatchUp(): void {
-    if (!this.ctx || !this.keepPitchGain || this.catchUpArmed) return;
+  private trackQuiet(interleaved: Float32Array): void {
+    let sum = 0;
+    for (let i = 0; i < interleaved.length; i++) {
+      const s = interleaved[i]!;
+      sum += s * s;
+    }
+    const rms = Math.sqrt(sum / interleaved.length);
+    if (rms < AudioOutput.QUIET_RMS) {
+      if (this.quietSince === 0) this.quietSince = performance.now();
+    } else {
+      this.quietSince = 0;
+    }
+  }
+
+  private maybeArmQuietCatchUp(): void {
+    if (!this.quietCatchUp || this.catchUpArmed) return;
+    if (this.quietSince === 0) return;
+    if (performance.now() - this.quietSince < AudioOutput.QUIET_HOLD_MS) return;
+    if (this.pendingSamples < AudioOutput.QUIET_MIN_LAG) return;
+    this.armCatchUpFade();
+  }
+
+  /** Once a minute, fade out and drop the lag queue so audio resyncs. */
+  private maybeArmTimedCatchUp(): void {
+    if (this.catchUpArmed) return;
     if (performance.now() - this.lastCatchUpWall < AudioOutput.CATCH_UP_EVERY_MS) return;
-    // Only bother if there's real lag to clear.
     if (this.pendingSamples < APU_SAMPLE_RATE * 0.25 * 2) {
       this.lastCatchUpWall = performance.now();
       return;
     }
+    this.armCatchUpFade();
+  }
 
+  private armCatchUpFade(): void {
+    if (!this.ctx || !this.keepPitchGain || this.catchUpArmed) return;
     const now = this.ctx.currentTime;
     const g = this.keepPitchGain.gain;
     g.cancelScheduledValues(now);
@@ -158,6 +235,7 @@ export class AudioOutput {
 
     this.clearPending();
     this.stopKeepPitch(false);
+    this.quietSince = 0;
 
     const now = this.ctx.currentTime;
     const g = this.keepPitchGain.gain;
@@ -186,13 +264,10 @@ export class AudioOutput {
     }
 
     if (this.pendingSamples + interleaved.length > AudioOutput.PENDING_MAX) {
-      // Hit the cap: keep the contiguous buffer we already have, ignore
-      // everything new until we've played most of it back.
       this.rejecting = true;
       return;
     }
 
-    // Copy — the emu reuses/clears its sample buffer.
     this.chunks.push(Float32Array.from(interleaved));
     this.pendingSamples += interleaved.length;
   }
@@ -222,7 +297,6 @@ export class AudioOutput {
   private flushKeepPitch(): void {
     if (!this.ctx || !this.keepPitchActive || this.muted) return;
     if (this.turboSources.length > 0) this.stopTurboSources();
-    // Don't schedule into a catch-up fade-out.
     if (this.catchUpArmed) return;
 
     const now = this.ctx.currentTime;
@@ -234,8 +308,7 @@ export class AudioOutput {
 
     const need = AudioOutput.CHUNK_FRAMES * 2;
     const frames = AudioOutput.CHUNK_FRAMES;
-    const gain = this.keepPitchGain ?? this.ctx.destination;
-    const vol = this.volume;
+    const gain = this.keepPitchGain ?? this.ensureMaster();
     const latestStart = now + AudioOutput.KEEP_LEAD;
     const scratch = new Float32Array(need);
 
@@ -250,8 +323,8 @@ export class AudioOutput {
       const left = buffer.getChannelData(0);
       const right = buffer.getChannelData(1);
       for (let i = 0; i < frames; i++) {
-        left[i] = scratch[i * 2]! * vol;
-        right[i] = scratch[i * 2 + 1]! * vol;
+        left[i] = scratch[i * 2]!;
+        right[i] = scratch[i * 2 + 1]!;
       }
 
       const src = this.ctx.createBufferSource();
@@ -291,16 +364,15 @@ export class AudioOutput {
     const buffer = this.ctx.createBuffer(2, frames, APU_SAMPLE_RATE);
     const left = buffer.getChannelData(0);
     const right = buffer.getChannelData(1);
-    const vol = this.volume;
     for (let i = 0; i < frames; i++) {
-      left[i] = interleaved[i * 2]! * vol;
-      right[i] = interleaved[i * 2 + 1]! * vol;
+      left[i] = interleaved[i * 2]!;
+      right[i] = interleaved[i * 2 + 1]!;
     }
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     src.playbackRate.value = rate;
-    src.connect(this.ctx.destination);
+    src.connect(this.ensureMaster());
     src.onended = () => {
       const idx = this.turboSources.indexOf(src);
       if (idx >= 0) this.turboSources.splice(idx, 1);
@@ -350,6 +422,14 @@ export class AudioOutput {
     this.stopKeepPitch(true);
     this.stopTurboSources();
     this.clearPending();
+    if (this.masterGain) {
+      try {
+        this.masterGain.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      this.masterGain = null;
+    }
     if (this.ctx) {
       await this.ctx.close();
       this.ctx = null;

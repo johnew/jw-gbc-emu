@@ -1,14 +1,12 @@
 import { FRAME_DURATION_MS } from "../core/types";
 
 /**
- * True for phones / DevTools device mode.
- * Uses a wide max-width so landscape phone viewports (often >768px) still count,
- * plus coarse pointer / no-hover for real devices.
+ * True for phones / tablets / DevTools device mode.
+ * Width-only — pointer/hover heuristics were locking scroll on desktop
+ * touchscreens and some windowed browsers.
  */
 export function isMobileLayout(): boolean {
-  return window.matchMedia(
-    "(max-width: 1024px), (pointer: coarse), (hover: none)",
-  ).matches;
+  return window.matchMedia("(max-width: 1024px)").matches;
 }
 
 function isLandscape(): boolean {
@@ -29,18 +27,12 @@ export function bindShellLayout(
   };
   sync();
   const mqWidth = window.matchMedia("(max-width: 1024px)");
-  const mqCoarse = window.matchMedia("(pointer: coarse)");
-  const mqHover = window.matchMedia("(hover: none)");
   const mqOrient = window.matchMedia("(orientation: landscape)");
   mqWidth.addEventListener("change", sync);
-  mqCoarse.addEventListener("change", sync);
-  mqHover.addEventListener("change", sync);
   mqOrient.addEventListener("change", sync);
   window.addEventListener("resize", sync);
   return () => {
     mqWidth.removeEventListener("change", sync);
-    mqCoarse.removeEventListener("change", sync);
-    mqHover.removeEventListener("change", sync);
     mqOrient.removeEventListener("change", sync);
     window.removeEventListener("resize", sync);
   };

@@ -126,7 +126,7 @@ export async function importSaveFile(host: BackupHost, file: File): Promise<void
     }
     for (const [slotStr, state] of Object.entries(bundle.savestates)) {
       const slot = Number(slotStr);
-      if (slot >= 1 && slot <= 9) saveSavestate(header, slot, state);
+      if (slot === 0 || (slot >= 1 && slot <= 9)) saveSavestate(header, slot, state);
     }
     host.refreshSlotHints();
     host.reportStatus(`Imported backup (${Object.keys(bundle.savestates).length} states)`);

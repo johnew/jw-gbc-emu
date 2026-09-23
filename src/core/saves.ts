@@ -1,12 +1,16 @@
 import { base64ToUint8, uint8ToBase64 } from "./encoding";
 import type { CartridgeHeader, EmulatorSavestate, SaveState } from "./types";
 
+/** Reserved savestate slot written on tab hide / background. */
+export const AUTO_SAVE_SLOT = 0;
+
 function batteryKey(header: CartridgeHeader): string {
   return `gbc-save:${header.title}:${header.checksum.toString(16)}`;
 }
 
 function savestateKey(header: CartridgeHeader, slot: number): string {
-  return `gbc-savestate:${header.title}:${header.checksum.toString(16)}:slot${slot}`;
+  const label = slot === AUTO_SAVE_SLOT ? "auto" : `slot${slot}`;
+  return `gbc-savestate:${header.title}:${header.checksum.toString(16)}:${label}`;
 }
 
 function encodeBattery(data: SaveState): string {
@@ -78,6 +82,7 @@ export function hasSavestate(header: CartridgeHeader, slot: number): boolean {
 
 export function listSavestateSlots(header: CartridgeHeader, maxSlot = 9): number[] {
   const slots: number[] = [];
+  if (hasSavestate(header, AUTO_SAVE_SLOT)) slots.push(AUTO_SAVE_SLOT);
   for (let i = 1; i <= maxSlot; i++) {
     if (hasSavestate(header, i)) slots.push(i);
   }

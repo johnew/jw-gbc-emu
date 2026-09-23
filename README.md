@@ -22,9 +22,13 @@ Open the URL Vite prints (usually `http://localhost:5173`) in **Firefox** or ano
 - **Speed** 1× / 2× / 4× / 6× (button or `Tab`)
 - DMG **shades** toggle (green / gray / pocket / brown)
 - Battery saves (+ RTC for Crystal) in `localStorage`
+- **Savestates** slots 1–9 plus an **Auto** slot (written when the tab is hidden)
+- Volume slider and optional **CRT** scanline filter
 - **Options** panel — download / import battery saves (`.sav`) and savestates
-- **Second game** — desktop: two panels side by side; **mobile: in-page Game 1 / Game 2 tabs** to switch quickly
+- **Second game** — desktop: two panels side by side; **mobile: in-page Game 1 / Game 2 tabs** to switch quickly (inactive tab muted on mobile)
 - **Link cable** — connect both sessions to trade in Pokémon Red/Blue (Cable Club)
+- **PWA** — installable / offline shell via service worker
+- Experimental **normal-pitch turbo** (optional quiet-window catch-up)
 
 ## Trading
 
